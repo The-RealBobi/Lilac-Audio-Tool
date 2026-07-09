@@ -681,7 +681,17 @@ def resolve_loop_points(args: argparse.Namespace, wav_path: Path) -> tuple[int |
 
 
 def audio_root() -> Path:
+    env = os.environ.get("L5_AUDIO_ROOT")
+    if env:
+        return Path(env).expanduser().resolve()
     return Path(__file__).resolve().parents[1]
+
+
+def data_root() -> Path:
+    env = os.environ.get("L5_AUDIO_DATA_ROOT")
+    if env:
+        return Path(env).expanduser().resolve()
+    return audio_root()
 
 
 def find_l5decompiler_root() -> Path | None:
@@ -758,7 +768,7 @@ def resolve_ffmpeg(download: bool = True) -> tuple[str, str]:
 
     key = ffmpeg_platform_key()
     asset, expected_sha = FFMPEG_ASSETS[key]
-    cache_dir = audio_root() / ".cache" / "dependencies"
+    cache_dir = data_root() / ".cache" / "dependencies"
     cache_dir.mkdir(parents=True, exist_ok=True)
     archive_path = cache_dir / asset
     executable = cache_dir / ("ffmpeg.exe" if key == "win-x64" else "ffmpeg")
@@ -860,7 +870,7 @@ def vgmstream_asset_name() -> str:
 
 def download_vgmstream() -> tuple[str | None, str]:
     asset_name = vgmstream_asset_name()
-    cache_dir = audio_root() / ".cache" / "dependencies" / "vgmstream"
+    cache_dir = data_root() / ".cache" / "dependencies" / "vgmstream"
     extract_dir = cache_dir / "extract"
     archive_path = cache_dir / asset_name
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -977,9 +987,33 @@ def helper_project_path(args: argparse.Namespace | None = None) -> Path:
     return Path(explicit) if explicit else Path(__file__).resolve().parent / "CriHcaTool" / "CriHcaTool.csproj"
 
 
-def inspect_hca_with_helper(hca_path: Path, helper_project: Path) -> dict[str, Any]:
+def helper_executable_path() -> Path | None:
+    name = "CriHcaTool.exe" if platform.system().lower() == "windows" else "CriHcaTool"
+    candidates = [
+        audio_root() / "tools" / "CriHcaToolRuntime" / name,
+        Path(__file__).resolve().parent / "CriHcaToolRuntime" / name,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def helper_command(args: argparse.Namespace | None, command_args: list[str]) -> list[str]:
+    executable = helper_executable_path()
+    if executable is not None:
+        return [str(executable), *command_args]
+
+    helper_project = helper_project_path(args)
+    return ["dotnet", "run", "--project", str(helper_project), "--", *command_args]
+
+
+def inspect_hca_with_helper(hca_path: Path, helper_project: Path | None = None) -> dict[str, Any]:
+    command = [str(helper_executable_path()), "inspect", str(hca_path)] if helper_executable_path() is not None else [
+        "dotnet", "run", "--project", str(helper_project or helper_project_path()), "--", "inspect", str(hca_path)
+    ]
     result = subprocess.run(
-        ["dotnet", "run", "--no-restore", "--project", str(helper_project), "--", "inspect", str(hca_path)],
+        command,
         check=True,
         capture_output=True,
         text=True,
@@ -1362,17 +1396,11 @@ def cmd_preview_awb_entry(args: argparse.Namespace) -> None:
     elif entry.extension == ".hca":
         if not decode_with_vgmstream():
             subprocess.run(
-                [
-                    "dotnet",
-                    "run",
-                    "--no-restore",
-                    "--project",
-                    str(helper_project_path(args)),
-                    "--",
+                helper_command(args, [
                     "decode",
                     str(entry_path),
                     str(wav_path),
-                ],
+                ]),
                 check=True,
                 capture_output=True,
                 text=True,
@@ -1381,17 +1409,11 @@ def cmd_preview_awb_entry(args: argparse.Namespace) -> None:
     elif entry.extension == ".adx":
         if not decode_with_vgmstream():
             subprocess.run(
-                [
-                    "dotnet",
-                    "run",
-                    "--no-restore",
-                    "--project",
-                    str(helper_project_path(args)),
-                    "--",
+                helper_command(args, [
                     "decode-adx",
                     str(entry_path),
                     str(wav_path),
-                ],
+                ]),
                 check=True,
                 capture_output=True,
                 text=True,
@@ -1534,17 +1556,11 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
         extension = ".hca" if args.codec == "HCA" else ".adx"
         hca_path = temp_root / f"{wav_path.stem}{extension}"
         bitrate = args.bitrate or estimate_hca_bitrate(original_entry, original_hca) if args.codec == "HCA" else None
-        command = [
-            "dotnet",
-            "run",
-            "--no-restore",
-            "--project",
-            str(helper_project),
-            "--",
+        command = helper_command(args, [
             "encode" if args.codec == "HCA" else "encode-adx",
             str(prepared_wav),
             str(hca_path),
-        ]
+        ])
         cri_encoder_path, cri_encoder_source = resolve_cri_hca_encoder(args.cri_hca_encoder)
         using_cri_encoder = args.codec == "HCA" and not args.no_cri_encoder and cri_encoder_path is not None
         if args.codec == "HCA" and using_cri_encoder:

@@ -20,4 +20,27 @@
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
     </PackageReference>
   </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="../tools/cri_audio_tool.py"
+             Link="tools/cri_audio_tool.py"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../tools/CriHcaTool/CriHcaTool.csproj"
+             Link="tools/CriHcaTool/CriHcaTool.csproj"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../tools/CriHcaTool/Program.cs"
+             Link="tools/CriHcaTool/Program.cs"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../AudioTool.Core/AudioTool.Core.csproj"
+             Link="AudioTool.Core/AudioTool.Core.csproj"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../AudioTool.Core/Hca/**/*.cs"
+             LinkBase="AudioTool.Core/Hca"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -5,6 +5,7 @@ bin/
 obj/
 **/bin/
 **/obj/
+dist/
 
 # Local caches and generated outputs
 .cache/

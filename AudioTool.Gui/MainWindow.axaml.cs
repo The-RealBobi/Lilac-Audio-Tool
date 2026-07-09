@@ -21,6 +21,7 @@ public sealed partial class MainWindow : Window
 {
     private readonly ObservableCollection<AwbEntryViewModel> _awbEntries = new();
     private readonly string _audioRoot;
+    private readonly string _dataRoot;
     private readonly string _preferencesPath;
     private bool _uiReady;
     private bool _loadingPreferences;
@@ -43,9 +44,10 @@ public sealed partial class MainWindow : Window
         _playbackTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _playbackTimer.Tick += OnPlaybackTimerTick;
         _audioRoot = ResolveAudioRoot();
-        _preferencesPath = Path.Combine(_audioRoot, "config", "user_preferences.json");
+        _dataRoot = ResolveDataRoot();
+        _preferencesPath = Path.Combine(_dataRoot, "config", "user_preferences.json");
         AwbEntriesGrid.ItemsSource = _awbEntries;
-        OutputDirectoryTextBox.Text = Path.Combine(_audioRoot, "work");
+        OutputDirectoryTextBox.Text = Path.Combine(_dataRoot, "work");
         CriEncoderPathTextBox.Text = ResolveDefaultCriEncoderPath();
         KeepHcaCheckBox.IsCheckedChanged += OnPreferenceChanged;
         PatchWaveformCheckBox.IsCheckedChanged += OnPreferenceChanged;
@@ -54,6 +56,7 @@ public sealed partial class MainWindow : Window
         _uiReady = true;
         UpdateCommandPreview();
         AppendLog($"AUDIO root: {_audioRoot}");
+        AppendLog($"Datos: {_dataRoot}");
         AppendLog($"Preferencias: {_preferencesPath}");
         _ = RestoreSelectedAudioAsync();
         _ = EnsurePluginsAsync();
@@ -194,7 +197,7 @@ public sealed partial class MainWindow : Window
 
         var selectorMode = SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index";
         var selectorValue = ((int)(EntryNumberBox.Value ?? 0)).ToString();
-        var previewDirectory = Path.Combine(_audioRoot, "work", "preview");
+        var previewDirectory = Path.Combine(_dataRoot, "work", "preview");
         await RunBusyAsync(async () =>
         {
             Directory.CreateDirectory(previewDirectory);
@@ -985,7 +988,7 @@ public sealed partial class MainWindow : Window
             AwbPathTextBox.Text = preferences.AwbPath ?? "";
             WavPathTextBox.Text = preferences.AudioPath ?? "";
             OutputDirectoryTextBox.Text = string.IsNullOrWhiteSpace(preferences.OutputDirectory)
-                ? Path.Combine(_audioRoot, "work")
+                ? Path.Combine(_dataRoot, "work")
                 : preferences.OutputDirectory;
             CriEncoderPathTextBox.Text = string.IsNullOrWhiteSpace(preferences.CriEncoderPath)
                 ? ResolveDefaultCriEncoderPath()
@@ -1068,22 +1071,34 @@ public sealed partial class MainWindow : Window
     private async Task<ProcessResult> RunPythonAsync(IReadOnlyList<string> arguments)
     {
         var scriptPath = Path.Combine(_audioRoot, "tools", "cri_audio_tool.py");
+        var python = ResolvePython();
+        if (python is null)
+        {
+            return new ProcessResult(127, "", "No se encontró Python 3. Instala Python o define L5_AUDIO_PYTHON con la ruta del ejecutable.");
+        }
+
         var startInfo = new ProcessStartInfo
         {
-            FileName = ResolvePython(),
+            FileName = python,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
             WorkingDirectory = _audioRoot
         };
+        startInfo.Environment["L5_AUDIO_ROOT"] = _audioRoot;
+        startInfo.Environment["L5_AUDIO_DATA_ROOT"] = _dataRoot;
         startInfo.ArgumentList.Add(scriptPath);
         foreach (var argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("No se pudo iniciar Python.");
+        using var process = Process.Start(startInfo);
+        if (process is null)
+        {
+            return new ProcessResult(127, "", "No se pudo iniciar Python.");
+        }
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
@@ -1106,17 +1121,59 @@ public sealed partial class MainWindow : Window
         };
     }
 
-    private static string ResolvePython()
+    private static string? ResolvePython()
     {
-        return OperatingSystem.IsWindows() ? "python" : "python3";
+        var explicitPython = Environment.GetEnvironmentVariable("L5_AUDIO_PYTHON");
+        if (ToolStarts(explicitPython, "--version"))
+        {
+            return explicitPython;
+        }
+
+        var candidates = OperatingSystem.IsWindows()
+            ? new[] { "py", "python" }
+            : ["python3", "python"];
+        return candidates.FirstOrDefault(candidate => ToolStarts(candidate, "--version"));
+    }
+
+    private static bool ToolStarts(string? fileName, string argument)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = fileName,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                ArgumentList = { argument }
+            });
+            process?.WaitForExit(3000);
+            return process is not null && process.HasExited && process.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static string ResolveAudioRoot()
     {
+        var explicitRoot = Environment.GetEnvironmentVariable("L5_AUDIO_ROOT");
+        if (IsAudioRoot(explicitRoot))
+        {
+            return Path.GetFullPath(explicitRoot!);
+        }
+
         var directory = AppContext.BaseDirectory;
         while (!string.IsNullOrWhiteSpace(directory))
         {
-            if (File.Exists(Path.Combine(directory, "tools", "cri_audio_tool.py")))
+            if (IsAudioRoot(directory))
             {
                 return directory;
             }
@@ -1130,7 +1187,29 @@ public sealed partial class MainWindow : Window
             directory = parent.FullName;
         }
 
-        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        return AppContext.BaseDirectory;
+    }
+
+    private static bool IsAudioRoot(string? path)
+    {
+        return !string.IsNullOrWhiteSpace(path) && File.Exists(Path.Combine(path, "tools", "cri_audio_tool.py"));
+    }
+
+    private static string ResolveDataRoot()
+    {
+        var explicitRoot = Environment.GetEnvironmentVariable("L5_AUDIO_DATA_ROOT");
+        if (!string.IsNullOrWhiteSpace(explicitRoot))
+        {
+            return Path.GetFullPath(explicitRoot);
+        }
+
+        var basePath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        if (string.IsNullOrWhiteSpace(basePath))
+        {
+            basePath = AppContext.BaseDirectory;
+        }
+
+        return Path.Combine(basePath, "LilacAudioTool");
     }
 
     private string ResolveDefaultCriEncoderPath()
