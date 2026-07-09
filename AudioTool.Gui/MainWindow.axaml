@@ -97,30 +97,45 @@
                   <Button Grid.Column="1" Content="Usar smpl" Click="OnUseWavLoopClick" />
                 </Grid>
 
-                <Grid Grid.Row="2" RowDefinitions="Auto,28,Auto" RowSpacing="6">
+                <Grid Grid.Row="2" RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
                   <TextBlock x:Name="LoopSummaryTextBlock" Text="Carga un WAV para ver duración y loop." Opacity="0.75" TextWrapping="Wrap" />
-                  <Canvas Grid.Row="1"
-                          x:Name="LoopCanvas"
-                          Height="28"
-                          Background="#202C3030"
-                          PointerPressed="OnLoopCanvasPointerPressed"
-                          SizeChanged="OnLoopCanvasSizeChanged">
-                    <Border x:Name="LoopSelectionBorder"
-                            Height="28"
-                            Background="#805CC8C2"
-                            BorderBrush="#FF8EEAE2"
-                            BorderThickness="1" />
-                    <Thumb x:Name="LoopStartThumb"
-                           Width="16"
-                           Height="28"
-                           Background="#FF8EEAE2"
-                           DragDelta="OnLoopStartDragDelta" />
-                    <Thumb x:Name="LoopEndThumb"
-                           Width="16"
-                           Height="28"
-                           Background="#FFE9C46A"
-                           DragDelta="OnLoopEndDragDelta" />
-                  </Canvas>
+                  <Grid Grid.Row="1" ColumnDefinitions="44,*" ColumnSpacing="10">
+                    <Button x:Name="PlaybackButton"
+                            Width="40"
+                            Height="36"
+                            Content="▶"
+                            FontSize="16"
+                            Click="OnPlaybackToggleClick" />
+                    <Canvas Grid.Column="1"
+                            x:Name="LoopCanvas"
+                            Height="36"
+                            Background="#202C3030"
+                            PointerPressed="OnLoopCanvasPointerPressed"
+                            SizeChanged="OnLoopCanvasSizeChanged">
+                      <Border x:Name="PlayerProgressBorder"
+                              Height="36"
+                              Background="#365CC8C2" />
+                      <Border x:Name="LoopSelectionBorder"
+                              Height="36"
+                              Background="#805CC8C2"
+                              BorderBrush="#FF8EEAE2"
+                              BorderThickness="1" />
+                      <Thumb x:Name="LoopStartThumb"
+                             Width="16"
+                             Height="36"
+                             Background="#FF8EEAE2"
+                             DragDelta="OnLoopStartDragDelta" />
+                      <Thumb x:Name="LoopEndThumb"
+                             Width="16"
+                             Height="36"
+                             Background="#FFE9C46A"
+                             DragDelta="OnLoopEndDragDelta" />
+                      <Border x:Name="PlayerPositionBorder"
+                              Width="2"
+                              Height="36"
+                              Background="#FFFFFFFF" />
+                    </Canvas>
+                  </Grid>
                   <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="8">
                     <NumericUpDown x:Name="LoopStartBox"
                                    Minimum="0"

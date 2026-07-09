@@ -13,6 +13,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 
 namespace Level5.AudioTool.Gui;
 
@@ -26,10 +27,18 @@ public sealed partial class MainWindow : Window
     private int _wavSampleRate;
     private int? _wavLoopStart;
     private int? _wavLoopEnd;
+    private string? _playerSourcePath;
+    private Process? _playbackProcess;
+    private readonly DispatcherTimer _playbackTimer;
+    private TimeSpan _playbackOffset;
+    private DateTime _playbackStartedAt;
+    private bool _playbackPaused;
 
     public MainWindow()
     {
         InitializeComponent();
+        _playbackTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        _playbackTimer.Tick += OnPlaybackTimerTick;
         _audioRoot = ResolveAudioRoot();
         AwbEntriesGrid.ItemsSource = _awbEntries;
         OutputDirectoryTextBox.Text = Path.Combine(_audioRoot, "work");
@@ -48,6 +57,12 @@ public sealed partial class MainWindow : Window
             AcbPathTextBox.Text = path;
             UpdateCommandPreview();
         }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        StopPlayback();
+        base.OnClosed(e);
     }
 
     private async void OnBrowseAwbClick(object? sender, RoutedEventArgs e)
@@ -70,6 +85,10 @@ public sealed partial class MainWindow : Window
 
         WavPathTextBox.Text = path;
         await LoadWavInfoAsync(path);
+        if (_wavSamples > 0)
+        {
+            SetPlayerSource(path);
+        }
         UpdateCommandPreview();
     }
 
@@ -162,8 +181,38 @@ public sealed partial class MainWindow : Window
             }
 
             AppendLog($"Previsualización: {preview.Wav}");
-            OpenWithSystemPlayer(preview.Wav);
+            await LoadWavInfoAsync(preview.Wav);
+            SetPlayerSource(preview.Wav);
+            StartPlayback();
         });
+    }
+
+    private void OnPlaybackToggleClick(object? sender, RoutedEventArgs e)
+    {
+        if (_playbackProcess is not null && !_playbackProcess.HasExited)
+        {
+            TogglePlaybackPause();
+            return;
+        }
+
+        var source = _playerSourcePath;
+        if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
+        {
+            var wavPath = WavPathTextBox.Text?.Trim();
+            if (!string.IsNullOrWhiteSpace(wavPath) && File.Exists(wavPath) && _wavSamples > 0)
+            {
+                source = wavPath;
+                SetPlayerSource(source);
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
+        {
+            AppendLog("No hay un WAV cargado para reproducir. Usa un WAV de reemplazo o previsualiza una entrada AWB.");
+            return;
+        }
+
+        StartPlayback();
     }
 
     private async void OnExecuteClick(object? sender, RoutedEventArgs e)
@@ -361,14 +410,24 @@ public sealed partial class MainWindow : Window
 
     private void OnLoopCanvasPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (_wavSamples <= 0 || LoopModeComboBox.SelectedIndex == 2)
+        if (_wavSamples <= 0)
         {
             return;
         }
 
-        LoopModeComboBox.SelectedIndex = 1;
         var x = e.GetPosition(LoopCanvas).X;
         var sample = XToSample(x);
+        if (LoopModeComboBox.SelectedIndex == 2)
+        {
+            LoopModeComboBox.SelectedIndex = 1;
+            var length = Math.Max(1, _wavSamples / 10);
+            var startSample = Math.Clamp(sample, 0, Math.Max(0, _wavSamples - 1));
+            LoopStartBox.Value = startSample;
+            LoopEndBox.Value = Math.Clamp(startSample + length, startSample + 1, _wavSamples);
+            return;
+        }
+
+        LoopModeComboBox.SelectedIndex = 1;
         var start = (int)(LoopStartBox.Value ?? 0);
         var end = (int)(LoopEndBox.Value ?? _wavSamples);
         if (Math.Abs(sample - start) <= Math.Abs(sample - end))
@@ -412,6 +471,8 @@ public sealed partial class MainWindow : Window
         var result = await RunPythonAsync(["wav-info", path]);
         if (result.ExitCode != 0)
         {
+            StopPlayback();
+            _playerSourcePath = null;
             _wavSamples = 0;
             _wavSampleRate = 0;
             _wavLoopStart = null;
@@ -588,6 +649,8 @@ public sealed partial class MainWindow : Window
         {
             Canvas.SetLeft(LoopSelectionBorder, 0);
             LoopSelectionBorder.Width = 0;
+            PlayerProgressBorder.Width = 0;
+            Canvas.SetLeft(PlayerPositionBorder, 0);
             return;
         }
 
@@ -600,6 +663,7 @@ public sealed partial class MainWindow : Window
         LoopSelectionBorder.Width = Math.Max(0, endX - startX);
         Canvas.SetLeft(LoopStartThumb, Math.Clamp(startX - LoopStartThumb.Width / 2, 0, Math.Max(0, width - LoopStartThumb.Width)));
         Canvas.SetLeft(LoopEndThumb, Math.Clamp(endX - LoopEndThumb.Width / 2, 0, Math.Max(0, width - LoopEndThumb.Width)));
+        UpdatePlaybackVisuals();
         LoopSummaryTextBlock.Text = _wavSamples <= 0
             ? "Carga un WAV para ver duración y loop."
             : $"WAV: {_wavSamples} samples ({FormatSeconds(_wavSamples)}). Loop: {DescribeLoop()}.";
@@ -611,7 +675,180 @@ public sealed partial class MainWindow : Window
         LoopEndBox.IsEnabled = enabled;
         LoopStartThumb.IsEnabled = enabled;
         LoopEndThumb.IsEnabled = enabled;
-        LoopCanvas.Opacity = enabled ? 1 : 0.45;
+        LoopCanvas.Opacity = _wavSamples > 0 ? 1 : 0.45;
+    }
+
+    private void SetPlayerSource(string path)
+    {
+        StopPlayback();
+        _playerSourcePath = path;
+        _playbackOffset = TimeSpan.Zero;
+        UpdatePlaybackVisuals();
+        PlaybackButton.Content = "▶";
+    }
+
+    private void StartPlayback()
+    {
+        if (string.IsNullOrWhiteSpace(_playerSourcePath) || !File.Exists(_playerSourcePath))
+        {
+            return;
+        }
+
+        StopPlayback();
+        if (!TryStartControlledPlayback(_playerSourcePath))
+        {
+            OpenWithSystemPlayer(_playerSourcePath);
+            return;
+        }
+
+        _playbackOffset = TimeSpan.Zero;
+        _playbackStartedAt = DateTime.UtcNow;
+        _playbackPaused = false;
+        PlaybackButton.Content = "⏸";
+        _playbackTimer.Start();
+    }
+
+    private bool TryStartControlledPlayback(string path)
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            return false;
+        }
+
+        var startInfo = new ProcessStartInfo("afplay", [path])
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        _playbackProcess = Process.Start(startInfo);
+        return _playbackProcess is not null;
+    }
+
+    private void TogglePlaybackPause()
+    {
+        if (_playbackProcess is null || _playbackProcess.HasExited)
+        {
+            StopPlayback();
+            return;
+        }
+
+        if (!OperatingSystem.IsMacOS())
+        {
+            StopPlayback();
+            return;
+        }
+
+        if (_playbackPaused)
+        {
+            SendSignal(_playbackProcess.Id, "CONT");
+            _playbackStartedAt = DateTime.UtcNow;
+            _playbackPaused = false;
+            PlaybackButton.Content = "⏸";
+            _playbackTimer.Start();
+        }
+        else
+        {
+            _playbackOffset = CurrentPlaybackPosition();
+            SendSignal(_playbackProcess.Id, "STOP");
+            _playbackPaused = true;
+            PlaybackButton.Content = "▶";
+            _playbackTimer.Stop();
+            UpdatePlaybackVisuals();
+        }
+    }
+
+    private void StopPlayback()
+    {
+        _playbackTimer.Stop();
+        if (_playbackProcess is not null)
+        {
+            try
+            {
+                if (!_playbackProcess.HasExited)
+                {
+                    _playbackProcess.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+                // Best effort cleanup for platform players.
+            }
+            finally
+            {
+                _playbackProcess.Dispose();
+                _playbackProcess = null;
+            }
+        }
+
+        _playbackOffset = TimeSpan.Zero;
+        _playbackPaused = false;
+        if (PlaybackButton is not null)
+        {
+            PlaybackButton.Content = "▶";
+        }
+        UpdatePlaybackVisuals();
+    }
+
+    private void OnPlaybackTimerTick(object? sender, EventArgs e)
+    {
+        if (_playbackProcess is null || _playbackProcess.HasExited)
+        {
+            StopPlayback();
+            return;
+        }
+
+        if (CurrentPlaybackPosition().TotalSeconds >= AudioDuration().TotalSeconds)
+        {
+            StopPlayback();
+            return;
+        }
+
+        UpdatePlaybackVisuals();
+    }
+
+    private TimeSpan CurrentPlaybackPosition()
+    {
+        return _playbackPaused ? _playbackOffset : _playbackOffset + (DateTime.UtcNow - _playbackStartedAt);
+    }
+
+    private TimeSpan AudioDuration()
+    {
+        return _wavSampleRate <= 0 || _wavSamples <= 0
+            ? TimeSpan.Zero
+            : TimeSpan.FromSeconds(_wavSamples / (double)_wavSampleRate);
+    }
+
+    private void UpdatePlaybackVisuals()
+    {
+        if (LoopCanvas is null || PlayerProgressBorder is null || PlayerPositionBorder is null)
+        {
+            return;
+        }
+
+        var width = LoopCanvas.Bounds.Width;
+        if (width <= 1 || _wavSamples <= 0)
+        {
+            PlayerProgressBorder.Width = 0;
+            Canvas.SetLeft(PlayerPositionBorder, 0);
+            return;
+        }
+
+        var duration = AudioDuration();
+        var progress = duration <= TimeSpan.Zero ? 0 : CurrentPlaybackPosition().TotalSeconds / duration.TotalSeconds;
+        progress = Math.Clamp(progress, 0, 1);
+        var x = width * progress;
+        PlayerProgressBorder.Width = x;
+        Canvas.SetLeft(PlayerPositionBorder, Math.Clamp(x, 0, Math.Max(0, width - PlayerPositionBorder.Width)));
+    }
+
+    private static void SendSignal(int pid, string signal)
+    {
+        using var process = Process.Start(new ProcessStartInfo("kill", [$"-{signal}", pid.ToString()])
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        });
+        process?.WaitForExit();
     }
 
     private double SampleToX(int sample)
