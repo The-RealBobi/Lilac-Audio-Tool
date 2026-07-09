@@ -16,6 +16,19 @@ The repository intentionally excludes local dumps, generated banks, Ghidra proje
 dotnet build Lilac.AudioTool.slnx
 ```
 
+Requirements for a source checkout:
+
+- .NET 9 SDK.
+- Python 3 available as `python3` on macOS/Linux or `python`/`py` on Windows.
+- Internet access on first use if FFmpeg or vgmstream are not already installed.
+
+Common first-run issues:
+
+- If Python is installed in a non-standard location, set `L5_AUDIO_PYTHON`.
+- If Homebrew/portable tools are not visible to GUI apps, set `L5_AUDIO_FFMPEG_PATH` and/or `L5_AUDIO_VGMSTREAM_PATH`.
+- The plugin scan checks PATH, common Homebrew paths, `PlugIns/` beside the app, and `PlugIns/` in the user data folder, including nested plugin folders.
+- No licensed CRI encoder is required or auto-detected; encoding is handled by the bundled helper invoked from the Python backend.
+
 ## Run GUI
 
 ```bash

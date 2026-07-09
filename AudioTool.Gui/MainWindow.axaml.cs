@@ -48,7 +48,6 @@ public sealed partial class MainWindow : Window
         _preferencesPath = Path.Combine(_dataRoot, "config", "user_preferences.json");
         AwbEntriesGrid.ItemsSource = _awbEntries;
         OutputDirectoryTextBox.Text = Path.Combine(_dataRoot, "work");
-        CriEncoderPathTextBox.Text = ResolveDefaultCriEncoderPath();
         KeepHcaCheckBox.IsCheckedChanged += OnPreferenceChanged;
         PatchWaveformCheckBox.IsCheckedChanged += OnPreferenceChanged;
         LoadPreferences();
@@ -143,17 +142,6 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(path))
         {
             OutputDirectoryTextBox.Text = path;
-            SavePreferences();
-            UpdateCommandPreview();
-        }
-    }
-
-    private async void OnBrowseCriEncoderClick(object? sender, RoutedEventArgs e)
-    {
-        var path = await PickFileAsync("Seleccionar encoder CRI HCA", [new FilePickerFileType("Ejecutable") { Patterns = ["*"] }]);
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            CriEncoderPathTextBox.Text = path;
             SavePreferences();
             UpdateCommandPreview();
         }
@@ -291,12 +279,6 @@ public sealed partial class MainWindow : Window
             };
 
             AddLoopArgs(replaceArgs);
-            var criEncoderPath = CriEncoderPathTextBox.Text?.Trim();
-            if (!string.IsNullOrWhiteSpace(criEncoderPath))
-            {
-                replaceArgs.Add("--cri-hca-encoder");
-                replaceArgs.Add(criEncoderPath);
-            }
             if (KeepHcaCheckBox.IsChecked == true)
             {
                 replaceArgs.Add("--keep-hca");
@@ -638,13 +620,6 @@ public sealed partial class MainWindow : Window
                 AppendLog($"No existe el archivo: {path}");
                 return false;
             }
-        }
-
-        var criEncoderPath = CriEncoderPathTextBox.Text?.Trim();
-        if (!string.IsNullOrWhiteSpace(criEncoderPath) && !File.Exists(criEncoderPath))
-        {
-            AppendLog($"No existe el encoder CRI: {criEncoderPath}");
-            return false;
         }
 
         if (string.IsNullOrWhiteSpace(outputDirectory))
@@ -990,9 +965,6 @@ public sealed partial class MainWindow : Window
             OutputDirectoryTextBox.Text = string.IsNullOrWhiteSpace(preferences.OutputDirectory)
                 ? Path.Combine(_dataRoot, "work")
                 : preferences.OutputDirectory;
-            CriEncoderPathTextBox.Text = string.IsNullOrWhiteSpace(preferences.CriEncoderPath)
-                ? ResolveDefaultCriEncoderPath()
-                : preferences.CriEncoderPath;
             SelectorModeComboBox.SelectedIndex = Math.Clamp(preferences.SelectorModeIndex, 0, 1);
             EntryNumberBox.Value = Math.Clamp(preferences.EntryNumber, 0, 999999);
             LoopModeComboBox.SelectedIndex = Math.Clamp(preferences.LoopModeIndex, 0, 2);
@@ -1026,7 +998,6 @@ public sealed partial class MainWindow : Window
                 AwbPath = AwbPathTextBox.Text?.Trim() ?? "",
                 AudioPath = WavPathTextBox.Text?.Trim() ?? "",
                 OutputDirectory = OutputDirectoryTextBox.Text?.Trim() ?? "",
-                CriEncoderPath = CriEncoderPathTextBox.Text?.Trim() ?? "",
                 SelectorModeIndex = Math.Clamp(SelectorModeComboBox.SelectedIndex, 0, 1),
                 EntryNumber = (int)(EntryNumberBox.Value ?? 0),
                 LoopModeIndex = Math.Clamp(LoopModeComboBox.SelectedIndex, 0, 2),
@@ -1212,18 +1183,6 @@ public sealed partial class MainWindow : Window
         return Path.Combine(basePath, "LilacAudioTool");
     }
 
-    private string ResolveDefaultCriEncoderPath()
-    {
-        var candidates = new[]
-        {
-            Path.Combine(_audioRoot, "vendor", "cri_adxle_tools_3.56.01", "cri", "tools", "ADX2LE", "ver.3", "CriAtomEncoderHcaLite.exe"),
-            Path.Combine(_audioRoot, "tools", "CriAtomEncoderHcaLite.exe"),
-            Path.Combine(_audioRoot, "PlugIns", "CriAtomEncoderHcaLite.exe")
-        };
-
-        return candidates.FirstOrDefault(File.Exists) ?? "";
-    }
-
     private static void OpenWithSystemPlayer(string path)
     {
         ProcessStartInfo startInfo;
@@ -1267,7 +1226,6 @@ public sealed partial class MainWindow : Window
         public string AwbPath { get; set; } = "";
         public string AudioPath { get; set; } = "";
         public string OutputDirectory { get; set; } = "";
-        public string CriEncoderPath { get; set; } = "";
         public int SelectorModeIndex { get; set; }
         public int EntryNumber { get; set; }
         public int LoopModeIndex { get; set; }

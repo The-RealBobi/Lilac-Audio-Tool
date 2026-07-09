@@ -720,6 +720,9 @@ def ffmpeg_platform_key() -> str:
 def tool_available(path: str | Path, args: list[str]) -> bool:
     try:
         candidate = str(path)
+        resolved = shutil.which(candidate) if not os.path.isabs(candidate) else None
+        if resolved:
+            candidate = resolved
         if os.path.isabs(candidate) and not Path(candidate).exists():
             return False
         result = subprocess.run([candidate, *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
@@ -731,6 +734,9 @@ def tool_available(path: str | Path, args: list[str]) -> bool:
 def vgmstream_available(path: str | Path) -> bool:
     try:
         candidate = str(path)
+        resolved = shutil.which(candidate) if not os.path.isabs(candidate) else None
+        if resolved:
+            candidate = resolved
         if os.path.isabs(candidate) and not Path(candidate).exists():
             return False
         result = subprocess.run([candidate, "-h"], capture_output=True, text=True, timeout=3)
@@ -738,6 +744,23 @@ def vgmstream_available(path: str | Path) -> bool:
         return "vgmstream" in output
     except Exception:
         return False
+
+
+def plugin_executables(root: Path, names: tuple[str, ...]) -> list[Path]:
+    if not root.exists():
+        return []
+    matches: list[Path] = []
+    for name in names:
+        direct = root / name
+        if direct.is_file():
+            matches.append(direct)
+    try:
+        for path in root.rglob("*"):
+            if path.is_file() and path.name in names:
+                matches.append(path)
+    except OSError:
+        pass
+    return list(dict.fromkeys(matches))
 
 
 def resolve_ffmpeg(download: bool = True) -> tuple[str, str]:
@@ -748,10 +771,14 @@ def resolve_ffmpeg(download: bool = True) -> tuple[str, str]:
     candidates.extend([
         "ffmpeg",
         "/opt/homebrew/bin/ffmpeg",
+        "/opt/homebrew/opt/ffmpeg/bin/ffmpeg",
         "/usr/local/bin/ffmpeg",
+        data_root() / "PlugIns" / ("ffmpeg.exe" if platform.system().lower() == "windows" else "ffmpeg"),
+        data_root() / ".cache" / "dependencies" / ("ffmpeg.exe" if platform.system().lower() == "windows" else "ffmpeg"),
         audio_root() / "PlugIns" / ("ffmpeg.exe" if platform.system().lower() == "windows" else "ffmpeg"),
-        audio_root() / ".cache" / "dependencies" / ("ffmpeg.exe" if platform.system().lower() == "windows" else "ffmpeg"),
     ])
+    candidates.extend(plugin_executables(data_root() / "PlugIns", ("ffmpeg", "ffmpeg.exe")))
+    candidates.extend(plugin_executables(audio_root() / "PlugIns", ("ffmpeg", "ffmpeg.exe")))
     if find_l5decompiler_root() is not None:
         l5_root = find_l5decompiler_root()
         candidates.extend([
@@ -794,10 +821,17 @@ def resolve_vgmstream(explicit: str | None = None) -> tuple[str | None, str]:
         "/opt/homebrew/bin/vgmstream-cli",
         "/opt/homebrew/opt/vgmstream/bin/vgmstream-cli",
         "/usr/local/bin/vgmstream-cli",
+        data_root() / "PlugIns" / "Mac" / "vgmstream-cli",
+        data_root() / "PlugIns" / "Linux" / "vgmstream-cli",
+        data_root() / "PlugIns" / "Windows" / "vgmstream-cli.exe",
         audio_root() / "PlugIns" / "Mac" / "vgmstream-cli",
         audio_root() / "PlugIns" / "Linux" / "vgmstream-cli",
         audio_root() / "PlugIns" / "Windows" / "vgmstream-cli.exe",
+        audio_root() / "PlugIns" / "vgmstream-cli",
+        audio_root() / "PlugIns" / "vgmstream-cli.exe",
     ])
+    candidates.extend(plugin_executables(data_root() / "PlugIns", ("vgmstream-cli", "vgmstream-cli.exe")))
+    candidates.extend(plugin_executables(audio_root() / "PlugIns", ("vgmstream-cli", "vgmstream-cli.exe")))
     l5_root = find_l5decompiler_root()
     if l5_root is not None:
         candidates.extend([
@@ -816,10 +850,10 @@ def resolve_vgmstream(explicit: str | None = None) -> tuple[str | None, str]:
 def bundled_vgmstream_destination() -> Path:
     system = platform.system().lower()
     if system == "windows":
-        return audio_root() / "PlugIns" / "Windows" / "vgmstream-cli.exe"
+        return data_root() / "PlugIns" / "Windows" / "vgmstream-cli.exe"
     if system == "linux":
-        return audio_root() / "PlugIns" / "Linux" / "vgmstream-cli"
-    return audio_root() / "PlugIns" / "Mac" / "vgmstream-cli"
+        return data_root() / "PlugIns" / "Linux" / "vgmstream-cli"
+    return data_root() / "PlugIns" / "Mac" / "vgmstream-cli"
 
 
 def find_l5decompiler_vgmstream() -> Path | None:
@@ -914,51 +948,6 @@ def download_vgmstream() -> tuple[str | None, str]:
     return None, "download-invalid"
 
 
-def resolve_cri_hca_encoder(explicit: str | None = None) -> tuple[Path | None, str]:
-    candidates: list[Path] = []
-    if explicit:
-        candidates.append(Path(explicit))
-
-    env = os.environ.get("L5_AUDIO_CRI_HCA_ENCODER")
-    if env:
-        candidates.append(Path(env))
-
-    candidates.extend([
-        audio_root() / "vendor" / "cri_adxle_tools_3.56.01" / "cri" / "tools" / "ADX2LE" / "ver.3" / "CriAtomEncoderHcaLite.exe",
-        audio_root() / "tools" / "CriAtomEncoderHcaLite.exe",
-        audio_root() / "PlugIns" / "CriAtomEncoderHcaLite.exe",
-    ])
-
-    for candidate in candidates:
-        if candidate.is_file():
-            source = "explicit" if explicit and candidate == Path(explicit) else "detected"
-            return candidate, source
-
-    return None, "missing"
-
-
-def crossover_wine_command() -> list[str] | None:
-    env = os.environ.get("L5_AUDIO_WINE")
-    if env and Path(env).exists():
-        return [env]
-
-    crossover = Path("/Volumes/BOBI/Applications/CrossOver_patched.app/Contents/SharedSupport/CrossOver/CrossOver-Hosted Application/wine")
-    if crossover.exists():
-        bottle = os.environ.get("L5_AUDIO_CROSSOVER_BOTTLE", "Steam")
-        return [str(crossover), "--bottle", bottle, "--no-gui", "--wait"]
-
-    for candidate in ("wine64", "wine"):
-        if shutil.which(candidate):
-            return [candidate]
-
-    return None
-
-
-def wine_path(path: Path) -> str:
-    resolved = path.resolve()
-    return "Z:" + str(resolved).replace("/", "\\")
-
-
 def download_verified(url: str, destination: Path, expected_sha256: str) -> None:
     if destination.exists() and sha256_file(destination) == expected_sha256:
         return
@@ -1022,47 +1011,6 @@ def inspect_hca_with_helper(hca_path: Path, helper_project: Path | None = None) 
     if json_start < 0:
         raise ValueError(f"HCA helper did not return JSON for {hca_path}: {result.stdout.strip()}")
     return json.loads(result.stdout[json_start:])
-
-
-def encode_hca_with_cri_encoder(
-    encoder_path: Path,
-    input_path: Path,
-    output_path: Path,
-    sample_rate: int,
-    quality: str,
-    loop_start: int | None,
-    loop_end: int | None,
-) -> subprocess.CompletedProcess[str]:
-    if not encoder_path.is_file():
-        raise FileNotFoundError(f"CRI HCA encoder not found: {encoder_path}")
-
-    use_wine = platform.system().lower() != "windows" and encoder_path.suffix.lower() == ".exe"
-    encoder_arg = wine_path(encoder_path) if use_wine else str(encoder_path)
-    input_arg = wine_path(input_path) if use_wine else str(input_path)
-    output_arg = wine_path(output_path) if use_wine else str(output_path)
-    command = [
-        encoder_arg,
-        input_arg,
-        output_arg,
-        "-codec=HCA",
-        f"-rate={sample_rate}",
-        f"-encquality={quality.upper()}",
-    ]
-    if use_wine:
-        wine = crossover_wine_command()
-        if wine is None:
-            raise FileNotFoundError("CRI HCA encoder is a Windows executable and Wine/CrossOver was not found.")
-        command = [*wine, *command]
-    if loop_start is not None and loop_end is not None:
-        command.extend([f"-lps={loop_start}", f"-lpe={loop_end}"])
-    else:
-        command.append("-lpoff")
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        suffix = f": {detail}" if detail else ""
-        raise RuntimeError(f"CRI HCA encoder failed with exit code {result.returncode}{suffix}")
-    return result
 
 
 def select_awb_entry(archive: AwbArchive, entry_id: int | None, index: int | None) -> AwbEntry:
@@ -1561,30 +1509,17 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
             str(prepared_wav),
             str(hca_path),
         ])
-        cri_encoder_path, cri_encoder_source = resolve_cri_hca_encoder(args.cri_hca_encoder)
-        using_cri_encoder = args.codec == "HCA" and not args.no_cri_encoder and cri_encoder_path is not None
-        if args.codec == "HCA" and using_cri_encoder:
-            encode_result = encode_hca_with_cri_encoder(
-                cri_encoder_path,
-                prepared_wav,
-                hca_path,
-                prepared_rate,
-                args.quality,
-                loop_start,
-                loop_end,
-            )
+        if args.codec == "HCA":
+            command.extend(["--quality", args.quality])
+        if bitrate is not None:
+            command.extend(["--bitrate", str(bitrate)])
+        if args.key:
+            command.extend(["--key", args.key])
+        if loop_start is not None and loop_end is not None:
+            command.extend(["--loop-start", str(loop_start), "--loop-end", str(loop_end)])
         else:
-            if args.codec == "HCA":
-                command.extend(["--quality", args.quality])
-            if bitrate is not None:
-                command.extend(["--bitrate", str(bitrate)])
-            if args.key:
-                command.extend(["--key", args.key])
-            if loop_start is not None and loop_end is not None:
-                command.extend(["--loop-start", str(loop_start), "--loop-end", str(loop_end)])
-            else:
-                command.append("--no-loop")
-            encode_result = subprocess.run(command, check=True, capture_output=True, text=True)
+            command.append("--no-loop")
+        encode_result = subprocess.run(command, check=True, capture_output=True, text=True)
         if encode_result.stdout:
             print(encode_result.stdout, end="" if encode_result.stdout.endswith("\n") else "\n")
         if encode_result.stderr:
@@ -1630,8 +1565,7 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
             "target_awb": str(target),
             "input_audio": str(wav_path),
             "codec": args.codec,
-            "encoder": "CRI Atom Encoder" if using_cri_encoder else "VGAudio",
-            "cri_encoder": None if cri_encoder_path is None else {"path": str(cri_encoder_path), "source": cri_encoder_source},
+            "encoder": "CriHcaTool",
             "prepared_by_ffmpeg": str(prepared_wav),
             "ffmpeg": {"path": ffmpeg_path, "source": ffmpeg_source},
             "selector": {"id": args.id, "index": args.index},
@@ -1920,8 +1854,6 @@ def build_parser() -> argparse.ArgumentParser:
     replace_wav_parser.add_argument("--quality", default="High", choices=["Highest", "High", "Middle", "Low", "Lowest"])
     replace_wav_parser.add_argument("--codec", default="HCA", choices=["HCA", "ADX"], help="Output codec. ADX is compatible with the bundled open encoder.")
     replace_wav_parser.add_argument("--bitrate", type=int)
-    replace_wav_parser.add_argument("--cri-hca-encoder", help="Optional path to CriAtomEncoder/criatomencd instead of VGAudio.")
-    replace_wav_parser.add_argument("--no-cri-encoder", action="store_true", help="Use the bundled C# encoder even when CRI's encoder is available.")
     replace_wav_parser.add_argument("--key", help="Optional HCA encryption key, decimal or 0x-prefixed.")
     replace_wav_parser.add_argument("--loop-mode", choices=["auto", "none"], default="auto", help="Auto reads the first WAV smpl loop when present.")
     replace_wav_parser.add_argument("--loop-start", type=int, help="Loop start sample, inclusive.")
