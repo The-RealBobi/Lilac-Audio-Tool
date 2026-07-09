@@ -1,0 +1,204 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Level5.AudioTool.Gui.MainWindow"
+        Width="1180"
+        Height="820"
+        MinWidth="980"
+        MinHeight="700"
+        Title="L5 Audio Tool">
+  <Grid Margin="20" RowDefinitions="Auto,*">
+    <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,18">
+      <TextBlock Text="L5 Audio Tool" FontSize="30" FontWeight="Bold" />
+      <TextBlock Text="Reemplazo de audio ACB/AWB mediante backend Python" Opacity="0.72" />
+    </StackPanel>
+
+    <Grid Grid.Row="1" ColumnDefinitions="420,12,*">
+      <Border Grid.Column="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
+        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" RowSpacing="12">
+          <TextBlock Text="Archivos" FontWeight="SemiBold" />
+
+          <StackPanel Grid.Row="1" Spacing="8">
+            <TextBlock Text="ACB" Opacity="0.8" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBox x:Name="AcbPathTextBox" Watermark="Banco .acb" IsReadOnly="True" />
+              <Button Grid.Column="1" Content="Examinar" Click="OnBrowseAcbClick" />
+            </Grid>
+          </StackPanel>
+
+          <StackPanel Grid.Row="2" Spacing="8">
+            <TextBlock Text="AWB" Opacity="0.8" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBox x:Name="AwbPathTextBox" Watermark="Banco .awb" IsReadOnly="True" />
+              <Button Grid.Column="1" Content="Examinar" Click="OnBrowseAwbClick" />
+            </Grid>
+          </StackPanel>
+
+          <StackPanel Grid.Row="3" Spacing="8">
+            <TextBlock Text="Audio de reemplazo" Opacity="0.8" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBox x:Name="WavPathTextBox" Watermark="WAV, FLAC, OGG, MP3, M4A..." IsReadOnly="True" />
+              <Button Grid.Column="1" Content="Examinar" Click="OnBrowseWavClick" />
+            </Grid>
+          </StackPanel>
+
+          <StackPanel Grid.Row="4" Spacing="8">
+            <TextBlock Text="Salida" Opacity="0.8" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBox x:Name="OutputDirectoryTextBox" Watermark="Carpeta de salida" IsReadOnly="True" />
+              <Button Grid.Column="1" Content="Examinar" Click="OnBrowseOutputClick" />
+            </Grid>
+          </StackPanel>
+
+          <StackPanel Grid.Row="5" Spacing="8">
+            <TextBlock Text="Encoder CRI HCA (opcional)" Opacity="0.8" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBox x:Name="CriEncoderPathTextBox" Watermark="CriAtomEncoder / criatomencd" IsReadOnly="True" />
+              <Button Grid.Column="1" Content="Examinar" Click="OnBrowseCriEncoderClick" />
+            </Grid>
+          </StackPanel>
+
+          <StackPanel Grid.Row="6" Spacing="12">
+            <Border Padding="12" CornerRadius="8" Background="#16232424">
+              <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="10">
+                <TextBlock Text="Entrada a sustituir" FontWeight="SemiBold" />
+                <Grid Grid.Row="1" ColumnDefinitions="120,*" ColumnSpacing="10">
+                  <ComboBox x:Name="SelectorModeComboBox" SelectedIndex="0" SelectionChanged="OnSelectorChanged">
+                    <ComboBoxItem Content="ID AWB" />
+                    <ComboBoxItem Content="Índice" />
+                  </ComboBox>
+                  <NumericUpDown Grid.Column="1"
+                                 x:Name="EntryNumberBox"
+                                 Minimum="0"
+                                 Maximum="999999"
+                                 Increment="1"
+                                 Value="0"
+                                 ValueChanged="OnSelectorNumberChanged" />
+                </Grid>
+                <Button Grid.Row="2"
+                        x:Name="InspectAwbButton"
+                        Content="Leer entradas AWB"
+                        HorizontalAlignment="Left"
+                        Click="OnInspectAwbClick" />
+              </Grid>
+            </Border>
+
+            <Border Padding="12" CornerRadius="8" Background="#16232424">
+              <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="10">
+                <TextBlock Text="Loop" FontWeight="SemiBold" />
+                <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <ComboBox x:Name="LoopModeComboBox" SelectedIndex="0" SelectionChanged="OnLoopModeChanged">
+                    <ComboBoxItem Content="Auto WAV smpl" />
+                    <ComboBoxItem Content="Manual" />
+                    <ComboBoxItem Content="Sin loop" />
+                  </ComboBox>
+                  <Button Grid.Column="1" Content="Usar smpl" Click="OnUseWavLoopClick" />
+                </Grid>
+
+                <Grid Grid.Row="2" RowDefinitions="Auto,28,Auto" RowSpacing="6">
+                  <TextBlock x:Name="LoopSummaryTextBlock" Text="Carga un WAV para ver duración y loop." Opacity="0.75" TextWrapping="Wrap" />
+                  <Canvas Grid.Row="1"
+                          x:Name="LoopCanvas"
+                          Height="28"
+                          Background="#202C3030"
+                          PointerPressed="OnLoopCanvasPointerPressed"
+                          SizeChanged="OnLoopCanvasSizeChanged">
+                    <Border x:Name="LoopSelectionBorder"
+                            Height="28"
+                            Background="#805CC8C2"
+                            BorderBrush="#FF8EEAE2"
+                            BorderThickness="1" />
+                    <Thumb x:Name="LoopStartThumb"
+                           Width="16"
+                           Height="28"
+                           Background="#FF8EEAE2"
+                           DragDelta="OnLoopStartDragDelta" />
+                    <Thumb x:Name="LoopEndThumb"
+                           Width="16"
+                           Height="28"
+                           Background="#FFE9C46A"
+                           DragDelta="OnLoopEndDragDelta" />
+                  </Canvas>
+                  <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="8">
+                    <NumericUpDown x:Name="LoopStartBox"
+                                   Minimum="0"
+                                   Maximum="0"
+                                   Increment="1"
+                                   ValueChanged="OnLoopNumberChanged" />
+                    <NumericUpDown Grid.Column="1"
+                                   x:Name="LoopEndBox"
+                                   Minimum="0"
+                                   Maximum="0"
+                                   Increment="1"
+                                   ValueChanged="OnLoopNumberChanged" />
+                  </Grid>
+                </Grid>
+
+                <CheckBox Grid.Row="3" x:Name="KeepHcaCheckBox" Content="Conservar HCA generado junto al AWB" IsChecked="True" />
+                <CheckBox Grid.Row="4" x:Name="PatchWaveformCheckBox" Content="Actualizar duración y formato en WaveformTable" IsChecked="False" />
+              </Grid>
+            </Border>
+
+            <Button x:Name="ExecuteButton"
+                    Content="Generar ACB/AWB modificados"
+                    Padding="18,9"
+                    HorizontalAlignment="Left"
+                    Click="OnExecuteClick" />
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <GridSplitter Grid.Column="1"
+                    Width="8"
+                    Margin="1,0"
+                    Background="#304F807D"
+                    ResizeDirection="Columns"
+                    ResizeBehavior="PreviousAndNext"
+                    ShowsPreview="True"
+                    Cursor="SizeWestEast" />
+
+      <Grid Grid.Column="2" RowDefinitions="260,12,*">
+        <Border Grid.Row="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
+          <Grid RowDefinitions="Auto,*" RowSpacing="10">
+            <TextBlock Text="Entradas AWB" FontWeight="SemiBold" />
+            <DataGrid Grid.Row="1"
+                      x:Name="AwbEntriesGrid"
+                      AutoGenerateColumns="False"
+                      IsReadOnly="True"
+                      GridLinesVisibility="Horizontal">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="Index" Binding="{Binding Index}" Width="80" />
+                <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="80" />
+                <DataGridTextColumn Header="Tipo" Binding="{Binding Extension}" Width="80" />
+                <DataGridTextColumn Header="Tamaño" Binding="{Binding Size}" Width="110" />
+                <DataGridTextColumn Header="SHA1" Binding="{Binding Sha1}" Width="*" />
+              </DataGrid.Columns>
+            </DataGrid>
+          </Grid>
+        </Border>
+
+        <GridSplitter Grid.Row="1"
+                      Height="8"
+                      Margin="0,1"
+                      Background="#304F807D"
+                      ResizeDirection="Rows"
+                      ResizeBehavior="PreviousAndNext"
+                      ShowsPreview="True"
+                      Cursor="SizeNorthSouth" />
+
+        <Border Grid.Row="2" Padding="14" CornerRadius="10" Background="#101C1C1C">
+          <Grid RowDefinitions="Auto,Auto,*" RowSpacing="10">
+            <TextBlock Text="Operación" FontWeight="SemiBold" />
+            <TextBlock Grid.Row="1" x:Name="CommandPreviewTextBlock" Text="Sin comando preparado." Opacity="0.75" TextWrapping="Wrap" />
+            <TextBox Grid.Row="2"
+                     x:Name="LogTextBox"
+                     IsReadOnly="True"
+                     AcceptsReturn="True"
+                     TextWrapping="Wrap"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+          </Grid>
+        </Border>
+      </Grid>
+    </Grid>
+  </Grid>
+</Window>

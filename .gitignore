@@ -1,0 +1,32 @@
+.DS_Store
+
+# Build outputs
+bin/
+obj/
+**/bin/
+**/obj/
+
+# Local caches and generated outputs
+.cache/
+work/
+GHIDRA/
+
+# Licensed/vendor binary payloads. Keep source/docs only.
+vendor/**/.git/
+vendor/**/*.exe
+vendor/**/*.dll
+vendor/cri_adxle_tools_*/
+
+# Runtime logs
+*.log
+
+# Large/local media test inputs and exports
+*.acb
+*.awb
+*.hca
+*.wav
+*.mp3
+*.zip
+
+# External/vendor checkouts are local-only for now.
+vendor/
