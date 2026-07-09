@@ -180,7 +180,8 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            AppendLog($"Previsualización: {preview.Wav}");
+            var decoder = string.IsNullOrWhiteSpace(preview.Decoder) ? "desconocido" : preview.Decoder;
+            AppendLog($"Previsualización ({decoder}): {preview.Wav}");
             await LoadWavInfoAsync(preview.Wav);
             SetPlayerSource(preview.Wav);
             StartPlayback();
@@ -1089,6 +1090,8 @@ public sealed partial class MainWindow : Window
     {
         [JsonPropertyName("wav")]
         public string? Wav { get; set; }
+        [JsonPropertyName("decoder")]
+        public string? Decoder { get; set; }
     }
 
     private sealed class PreparedWavInfo

@@ -681,6 +681,18 @@ def tool_available(path: str | Path, args: list[str]) -> bool:
         return False
 
 
+def vgmstream_available(path: str | Path) -> bool:
+    try:
+        candidate = str(path)
+        if os.path.isabs(candidate) and not Path(candidate).exists():
+            return False
+        result = subprocess.run([candidate, "-h"], capture_output=True, text=True, timeout=3)
+        output = f"{result.stdout}\n{result.stderr}".lower()
+        return "vgmstream" in output
+    except Exception:
+        return False
+
+
 def resolve_ffmpeg(download: bool = True) -> tuple[str, str]:
     env = os.environ.get("L5_AUDIO_FFMPEG_PATH")
     candidates: list[Path | str] = []
@@ -719,6 +731,39 @@ def resolve_ffmpeg(download: bool = True) -> tuple[str, str]:
             shutil.copyfileobj(source, output)
         executable.chmod(0o755)
     return str(executable), "downloaded"
+
+
+def resolve_vgmstream(explicit: str | None = None) -> tuple[str | None, str]:
+    candidates: list[Path | str] = []
+    if explicit:
+        candidates.append(explicit)
+
+    env = os.environ.get("L5_AUDIO_VGMSTREAM_PATH")
+    if env:
+        candidates.append(env)
+
+    candidates.extend([
+        "vgmstream-cli",
+        "/opt/homebrew/bin/vgmstream-cli",
+        "/opt/homebrew/opt/vgmstream/bin/vgmstream-cli",
+        "/usr/local/bin/vgmstream-cli",
+        audio_root() / "PlugIns" / "Mac" / "vgmstream-cli",
+        audio_root() / "PlugIns" / "Linux" / "vgmstream-cli",
+        audio_root() / "PlugIns" / "Windows" / "vgmstream-cli.exe",
+    ])
+    l5_root = find_l5decompiler_root()
+    if l5_root is not None:
+        candidates.extend([
+            l5_root / "PlugIns" / "Mac" / "vgmstream-cli",
+            l5_root / "PlugIns" / "Linux" / "vgmstream-cli",
+            l5_root / "PlugIns" / "Windows" / "vgmstream-cli.exe",
+        ])
+
+    for candidate in candidates:
+        if vgmstream_available(candidate):
+            return str(candidate), "existing"
+
+    return None, "missing"
 
 
 def resolve_cri_hca_encoder(explicit: str | None = None) -> tuple[Path | None, str]:
@@ -1118,43 +1163,64 @@ def cmd_preview_awb_entry(args: argparse.Namespace) -> None:
     entry_path = output / f"{source.stem}_{entry.index:04d}_{entry.id:05d}{entry.extension}"
     entry_path.write_bytes(entry.data)
     wav_path = output / f"{source.stem}_{entry.index:04d}_{entry.id:05d}.wav"
+    decoder = "copy"
+
+    def decode_with_vgmstream() -> bool:
+        nonlocal decoder
+        vgmstream_path, _ = resolve_vgmstream(args.vgmstream)
+        if vgmstream_path is None:
+            return False
+        wav_path.unlink(missing_ok=True)
+        result = subprocess.run(
+            [vgmstream_path, "-o", str(wav_path), str(entry_path)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and wav_path.exists() and wav_path.stat().st_size > 0:
+            decoder = "vgmstream"
+            return True
+        return False
 
     if entry.extension == ".wav":
         shutil.copy2(entry_path, wav_path)
     elif entry.extension == ".hca":
-        subprocess.run(
-            [
-                "dotnet",
-                "run",
-                "--no-restore",
-                "--project",
-                str(helper_project_path(args)),
-                "--",
-                "decode",
-                str(entry_path),
-                str(wav_path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        if not decode_with_vgmstream():
+            subprocess.run(
+                [
+                    "dotnet",
+                    "run",
+                    "--no-restore",
+                    "--project",
+                    str(helper_project_path(args)),
+                    "--",
+                    "decode",
+                    str(entry_path),
+                    str(wav_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            decoder = "cri-hca-tool"
     elif entry.extension == ".adx":
-        subprocess.run(
-            [
-                "dotnet",
-                "run",
-                "--no-restore",
-                "--project",
-                str(helper_project_path(args)),
-                "--",
-                "decode-adx",
-                str(entry_path),
-                str(wav_path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        if not decode_with_vgmstream():
+            subprocess.run(
+                [
+                    "dotnet",
+                    "run",
+                    "--no-restore",
+                    "--project",
+                    str(helper_project_path(args)),
+                    "--",
+                    "decode-adx",
+                    str(entry_path),
+                    str(wav_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            decoder = "cri-hca-tool-adx"
     else:
         raise ValueError(f"Preview is not supported for AWB entry type {entry.extension}")
 
@@ -1170,6 +1236,7 @@ def cmd_preview_awb_entry(args: argparse.Namespace) -> None:
             },
             "extracted": str(entry_path),
             "wav": str(wav_path),
+            "decoder": decoder,
         },
         ensure_ascii=False,
         indent=2,
@@ -1633,6 +1700,7 @@ def build_parser() -> argparse.ArgumentParser:
     preview_parser.add_argument("--id", type=lambda value: int(value, 0))
     preview_parser.add_argument("--index", type=lambda value: int(value, 0))
     preview_parser.add_argument("--hca-tool", help="Path to CriHcaTool.csproj.")
+    preview_parser.add_argument("--vgmstream", help="Path to vgmstream-cli.")
     preview_parser.set_defaults(func=cmd_preview_awb_entry)
 
     replace_parser = subparsers.add_parser("replace-awb", help="Write a new AWB with selected entries replaced.")
