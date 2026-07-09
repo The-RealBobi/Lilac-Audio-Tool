@@ -11,4 +11,8 @@
     <PackageReference Include="VGAudio" Version="2.2.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\AudioTool.Core\AudioTool.Core.csproj" />
+  </ItemGroup>
+
 </Project>

@@ -33,6 +33,7 @@ public sealed partial class MainWindow : Window
         _audioRoot = ResolveAudioRoot();
         AwbEntriesGrid.ItemsSource = _awbEntries;
         OutputDirectoryTextBox.Text = Path.Combine(_audioRoot, "work");
+        CriEncoderPathTextBox.Text = ResolveDefaultCriEncoderPath();
         SetLoopEnabled(false);
         _uiReady = true;
         UpdateCommandPreview();
@@ -178,6 +179,7 @@ public sealed partial class MainWindow : Window
             }
 
             var replaceReport = LoadReplaceReport(targetAwb);
+            LogReplaceWarnings(replaceReport);
 
             if (PatchWaveformCheckBox.IsChecked == true)
             {
@@ -411,6 +413,19 @@ public sealed partial class MainWindow : Window
         }
 
         return report;
+    }
+
+    private void LogReplaceWarnings(ReplaceReport report)
+    {
+        foreach (var check in report.Checks ?? [])
+        {
+            if (!string.Equals(check.Status, "warning", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            AppendLog($"Aviso: {check.Name} - {check.Describe()}");
+        }
     }
 
     private void ApplyWavLoop()
@@ -696,6 +711,18 @@ public sealed partial class MainWindow : Window
         return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
     }
 
+    private string ResolveDefaultCriEncoderPath()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(_audioRoot, "vendor", "cri_adxle_tools_3.56.01", "cri", "tools", "ADX2LE", "ver.3", "CriAtomEncoderHcaLite.exe"),
+            Path.Combine(_audioRoot, "tools", "CriAtomEncoderHcaLite.exe"),
+            Path.Combine(_audioRoot, "PlugIns", "CriAtomEncoderHcaLite.exe")
+        };
+
+        return candidates.FirstOrDefault(File.Exists) ?? "";
+    }
+
     private void AppendLog(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -730,14 +757,19 @@ public sealed partial class MainWindow : Window
 
     private sealed class WavInfo
     {
+        [JsonPropertyName("sample_count")]
         public int SampleCount { get; set; }
+        [JsonPropertyName("sample_rate")]
         public int SampleRate { get; set; }
+        [JsonPropertyName("loop")]
         public WavLoop? Loop { get; set; }
     }
 
     private sealed class WavLoop
     {
+        [JsonPropertyName("start")]
         public int Start { get; set; }
+        [JsonPropertyName("end")]
         public int End { get; set; }
     }
 
@@ -751,6 +783,8 @@ public sealed partial class MainWindow : Window
         public int? LoopEnd { get; set; }
         [JsonPropertyName("prepared_wav_info")]
         public PreparedWavInfo? PreparedWavInfo { get; set; }
+        [JsonPropertyName("checks")]
+        public List<ReplaceCheck>? Checks { get; set; }
     }
 
     private sealed class PreparedWavInfo
@@ -759,5 +793,38 @@ public sealed partial class MainWindow : Window
         public int? SampleRate { get; set; }
         [JsonPropertyName("channels")]
         public int? Channels { get; set; }
+    }
+
+    private sealed class ReplaceCheck
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+        [JsonPropertyName("status")]
+        public string? Status { get; set; }
+        [JsonExtensionData]
+        public Dictionary<string, JsonElement>? Extra { get; set; }
+
+        public string Describe()
+        {
+            if (Extra is null || Extra.Count == 0)
+            {
+                return "revisa el reporte generado.";
+            }
+
+            return string.Join(", ", Extra.Select(item => $"{item.Key}={FormatJsonValue(item.Value)}"));
+        }
+
+        private static string FormatJsonValue(JsonElement value)
+        {
+            return value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString() ?? "",
+                JsonValueKind.Number => value.ToString(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                JsonValueKind.Null => "null",
+                _ => value.GetRawText()
+            };
+        }
     }
 }

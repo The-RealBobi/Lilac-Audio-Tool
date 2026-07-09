@@ -721,6 +721,51 @@ def resolve_ffmpeg(download: bool = True) -> tuple[str, str]:
     return str(executable), "downloaded"
 
 
+def resolve_cri_hca_encoder(explicit: str | None = None) -> tuple[Path | None, str]:
+    candidates: list[Path] = []
+    if explicit:
+        candidates.append(Path(explicit))
+
+    env = os.environ.get("L5_AUDIO_CRI_HCA_ENCODER")
+    if env:
+        candidates.append(Path(env))
+
+    candidates.extend([
+        audio_root() / "vendor" / "cri_adxle_tools_3.56.01" / "cri" / "tools" / "ADX2LE" / "ver.3" / "CriAtomEncoderHcaLite.exe",
+        audio_root() / "tools" / "CriAtomEncoderHcaLite.exe",
+        audio_root() / "PlugIns" / "CriAtomEncoderHcaLite.exe",
+    ])
+
+    for candidate in candidates:
+        if candidate.is_file():
+            source = "explicit" if explicit and candidate == Path(explicit) else "detected"
+            return candidate, source
+
+    return None, "missing"
+
+
+def crossover_wine_command() -> list[str] | None:
+    env = os.environ.get("L5_AUDIO_WINE")
+    if env and Path(env).exists():
+        return [env]
+
+    crossover = Path("/Volumes/BOBI/Applications/CrossOver_patched.app/Contents/SharedSupport/CrossOver/CrossOver-Hosted Application/wine")
+    if crossover.exists():
+        bottle = os.environ.get("L5_AUDIO_CROSSOVER_BOTTLE", "Steam")
+        return [str(crossover), "--bottle", bottle, "--no-gui", "--wait"]
+
+    for candidate in ("wine64", "wine"):
+        if shutil.which(candidate):
+            return [candidate]
+
+    return None
+
+
+def wine_path(path: Path) -> str:
+    resolved = path.resolve()
+    return "Z:" + str(resolved).replace("/", "\\")
+
+
 def download_verified(url: str, destination: Path, expected_sha256: str) -> None:
     if destination.exists() and sha256_file(destination) == expected_sha256:
         return
@@ -774,19 +819,33 @@ def encode_hca_with_cri_encoder(
     if not encoder_path.is_file():
         raise FileNotFoundError(f"CRI HCA encoder not found: {encoder_path}")
 
+    use_wine = platform.system().lower() != "windows" and encoder_path.suffix.lower() == ".exe"
+    encoder_arg = wine_path(encoder_path) if use_wine else str(encoder_path)
+    input_arg = wine_path(input_path) if use_wine else str(input_path)
+    output_arg = wine_path(output_path) if use_wine else str(output_path)
     command = [
-        str(encoder_path),
-        str(input_path),
-        str(output_path),
+        encoder_arg,
+        input_arg,
+        output_arg,
         "-codec=HCA",
         f"-rate={sample_rate}",
         f"-encquality={quality.upper()}",
     ]
+    if use_wine:
+        wine = crossover_wine_command()
+        if wine is None:
+            raise FileNotFoundError("CRI HCA encoder is a Windows executable and Wine/CrossOver was not found.")
+        command = [*wine, *command]
     if loop_start is not None and loop_end is not None:
         command.extend([f"-lps={loop_start}", f"-lpe={loop_end}"])
     else:
         command.append("-lpoff")
-    return subprocess.run(command, check=True, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(f"CRI HCA encoder failed with exit code {result.returncode}{suffix}")
+    return result
 
 
 def select_awb_entry(archive: AwbArchive, entry_id: int | None, index: int | None) -> AwbEntry:
@@ -941,13 +1000,43 @@ def build_replace_checks(
         "loop_end": loop_end,
         "prepared_samples": prepared_info.get("sample_count"),
     })
+    original_samples = int(original.get("SampleCount") or 0)
+    effective_samples = int(hca_report.get("hcaSampleCount") or prepared_info.get("sample_count") or 0) if isinstance(hca_report, dict) else int(prepared_info.get("sample_count") or 0)
+    duration_ratio = effective_samples / original_samples if original_samples > 0 else None
+    checks.append({
+        "name": "duration",
+        "status": "warning" if duration_ratio is not None and (duration_ratio < 0.75 or duration_ratio > 1.25) else "ok",
+        "original_samples": original_samples,
+        "new_samples": effective_samples,
+        "ratio": None if duration_ratio is None else round(duration_ratio, 4),
+    })
+    original_looping = bool(original.get("Looping"))
+    new_looping = loop_start is not None and loop_end is not None
+    checks.append({
+        "name": "loop_semantics",
+        "status": "warning" if original_looping != new_looping else "ok",
+        "original_looping": original_looping,
+        "new_looping": new_looping,
+        "original_loop_start": original.get("LoopStartSample"),
+        "original_loop_end": original.get("LoopEndSample"),
+        "new_loop_start": loop_start,
+        "new_loop_end": loop_end,
+    })
     new_size = hca_report.get("outputSize") if isinstance(hca_report, dict) else None
     checks.append({
         "name": "awb_entry_size",
-        "status": "changed",
+        "status": "warning" if new_size is not None and original_entry.size > 0 and (new_size / original_entry.size > 1.5 or new_size / original_entry.size < 0.5) else "changed",
         "original_bytes": original_entry.size,
         "new_hca_bytes": new_size,
     })
+    new_version = hca_report.get("hcaVersion") if isinstance(hca_report, dict) else None
+    if new_version is not None:
+        checks.append({
+            "name": "hca_version",
+            "status": "warning" if int(original_hca.get("Version") or 0) != int(new_version or 0) else "ok",
+            "original_version": original_hca.get("Version"),
+            "new_version": new_version,
+        })
     checks.append({
         "name": "hca_encryption",
         "status": "warning" if int(original.get("EncryptionType") or 0) != 0 else "ok",
@@ -1145,10 +1234,11 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
             str(prepared_wav),
             str(hca_path),
         ]
-        using_cri_encoder = bool(args.cri_hca_encoder)
+        cri_encoder_path, cri_encoder_source = resolve_cri_hca_encoder(args.cri_hca_encoder)
+        using_cri_encoder = args.codec == "HCA" and not args.no_cri_encoder and cri_encoder_path is not None
         if args.codec == "HCA" and using_cri_encoder:
             encode_result = encode_hca_with_cri_encoder(
-                Path(args.cri_hca_encoder),
+                cri_encoder_path,
                 prepared_wav,
                 hca_path,
                 prepared_rate,
@@ -1189,6 +1279,9 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
                     if isinstance(encode_report, dict):
                         encode_report["normalizedHcaCiph"] = "type1-to-plain"
                         encode_report["hcaEncryptionType"] = (encoded_hca.get("Hca") or {}).get("EncryptionType")
+            if isinstance(encode_report, dict):
+                encode_report["hcaVersion"] = encoded_hca.get("Version")
+                encode_report["hcaEncryptionType"] = (encoded_hca.get("Hca") or {}).get("EncryptionType")
 
         if args.keep_hca:
             keep_path = target.with_suffix(target.suffix + ".replacement.hca")
@@ -1211,6 +1304,7 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
             "input_audio": str(wav_path),
             "codec": args.codec,
             "encoder": "CRI Atom Encoder" if using_cri_encoder else "VGAudio",
+            "cri_encoder": None if cri_encoder_path is None else {"path": str(cri_encoder_path), "source": cri_encoder_source},
             "prepared_by_ffmpeg": str(prepared_wav),
             "ffmpeg": {"path": ffmpeg_path, "source": ffmpeg_source},
             "selector": {"id": args.id, "index": args.index},
@@ -1485,6 +1579,7 @@ def build_parser() -> argparse.ArgumentParser:
     replace_wav_parser.add_argument("--codec", default="HCA", choices=["HCA", "ADX"], help="Output codec. ADX is compatible with the bundled open encoder.")
     replace_wav_parser.add_argument("--bitrate", type=int)
     replace_wav_parser.add_argument("--cri-hca-encoder", help="Optional path to CriAtomEncoder/criatomencd instead of VGAudio.")
+    replace_wav_parser.add_argument("--no-cri-encoder", action="store_true", help="Use the bundled C# encoder even when CRI's encoder is available.")
     replace_wav_parser.add_argument("--key", help="Optional HCA encryption key, decimal or 0x-prefixed.")
     replace_wav_parser.add_argument("--loop-mode", choices=["auto", "none"], default="auto", help="Auto reads the first WAV smpl loop when present.")
     replace_wav_parser.add_argument("--loop-start", type=int, help="Loop start sample, inclusive.")

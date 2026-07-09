@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/tools/">
+    <Project Path="tools/CriHcaTool/CriHcaTool.csproj" />
+  </Folder>
+  <Project Path="AudioTool.Core/AudioTool.Core.csproj" />
+  <Project Path="AudioTool.Gui/AudioTool.Gui.csproj" />
+</Solution>
