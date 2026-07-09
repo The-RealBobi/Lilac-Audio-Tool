@@ -19,6 +19,7 @@ try
         "encode" => Encode(args[1..]),
         "encode-adx" => EncodeAdx(args[1..]),
         "decode" => Decode(args[1..]),
+        "decode-adx" => DecodeAdx(args[1..]),
         "inspect" => Inspect(args[1..]),
         "uncipher-type1" => UncipherType1(args[1..]),
         _ => Fail($"Unknown command: {args[0]}")
@@ -200,6 +201,23 @@ static int Decode(string[] args)
     return 0;
 }
 
+static int DecodeAdx(string[] args)
+{
+    if (args.Length < 2)
+    {
+        return Fail("decode-adx requires INPUT.adx OUTPUT.wav");
+    }
+
+    var inputPath = args[0];
+    var outputPath = args[1];
+    using var input = File.OpenRead(inputPath);
+    var audio = new AdxReader().ReadFormat(input);
+    Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath)) ?? ".");
+    using var output = File.Create(outputPath);
+    new WaveWriter().WriteToStream(audio, output);
+    return 0;
+}
+
 static int EncodeAdx(string[] args)
 {
     if (args.Length < 2)
@@ -298,6 +316,7 @@ static void PrintUsage()
     Console.Error.WriteLine("  CriHcaTool encode INPUT.wav OUTPUT.hca [--quality High] [--bitrate N] [--key KEY] [--loop-start N --loop-end N|--no-loop]");
     Console.Error.WriteLine("  CriHcaTool encode-adx INPUT.wav OUTPUT.adx [--no-loop]");
     Console.Error.WriteLine("  CriHcaTool decode INPUT.hca OUTPUT.wav [--key KEY]");
+    Console.Error.WriteLine("  CriHcaTool decode-adx INPUT.adx OUTPUT.wav");
     Console.Error.WriteLine("  CriHcaTool inspect INPUT.hca [--key KEY]");
     Console.Error.WriteLine("  CriHcaTool uncipher-type1 INPUT.hca OUTPUT.hca");
 }

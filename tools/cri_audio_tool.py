@@ -1108,6 +1108,74 @@ def cmd_unpack_awb(args: argparse.Namespace) -> None:
     print(f"Extracted {len(extracted)} entries to {output}")
 
 
+def cmd_preview_awb_entry(args: argparse.Namespace) -> None:
+    source = Path(args.source)
+    output = Path(args.output)
+    archive = parse_awb(read_cri(source))
+    entry = select_awb_entry(archive, args.id, args.index)
+    output.mkdir(parents=True, exist_ok=True)
+
+    entry_path = output / f"{source.stem}_{entry.index:04d}_{entry.id:05d}{entry.extension}"
+    entry_path.write_bytes(entry.data)
+    wav_path = output / f"{source.stem}_{entry.index:04d}_{entry.id:05d}.wav"
+
+    if entry.extension == ".wav":
+        shutil.copy2(entry_path, wav_path)
+    elif entry.extension == ".hca":
+        subprocess.run(
+            [
+                "dotnet",
+                "run",
+                "--no-restore",
+                "--project",
+                str(helper_project_path(args)),
+                "--",
+                "decode",
+                str(entry_path),
+                str(wav_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    elif entry.extension == ".adx":
+        subprocess.run(
+            [
+                "dotnet",
+                "run",
+                "--no-restore",
+                "--project",
+                str(helper_project_path(args)),
+                "--",
+                "decode-adx",
+                str(entry_path),
+                str(wav_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    else:
+        raise ValueError(f"Preview is not supported for AWB entry type {entry.extension}")
+
+    print(json.dumps(
+        {
+            "source": str(source),
+            "entry": {
+                "index": entry.index,
+                "id": entry.id,
+                "extension": entry.extension,
+                "size": entry.size,
+                "sha1": hashlib.sha1(entry.data).hexdigest(),
+            },
+            "extracted": str(entry_path),
+            "wav": str(wav_path),
+        },
+        ensure_ascii=False,
+        indent=2,
+    ))
+
+
 def parse_replacements(values: list[str], by_id: bool) -> dict[int, Path]:
     replacements: dict[int, Path] = {}
     for value in values:
@@ -1558,6 +1626,14 @@ def build_parser() -> argparse.ArgumentParser:
     unpack_parser.add_argument("source")
     unpack_parser.add_argument("--output", required=True)
     unpack_parser.set_defaults(func=cmd_unpack_awb)
+
+    preview_parser = subparsers.add_parser("preview-awb-entry", help="Extract one AWB entry and decode it to WAV for preview.")
+    preview_parser.add_argument("source")
+    preview_parser.add_argument("--output", required=True)
+    preview_parser.add_argument("--id", type=lambda value: int(value, 0))
+    preview_parser.add_argument("--index", type=lambda value: int(value, 0))
+    preview_parser.add_argument("--hca-tool", help="Path to CriHcaTool.csproj.")
+    preview_parser.set_defaults(func=cmd_preview_awb_entry)
 
     replace_parser = subparsers.add_parser("replace-awb", help="Write a new AWB with selected entries replaced.")
     replace_parser.add_argument("source")

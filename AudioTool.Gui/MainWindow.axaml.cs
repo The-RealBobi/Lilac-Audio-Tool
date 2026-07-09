@@ -126,6 +126,46 @@ public sealed partial class MainWindow : Window
         });
     }
 
+    private async void OnPreviewEntryClick(object? sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(AwbPathTextBox.Text) || !File.Exists(AwbPathTextBox.Text))
+        {
+            AppendLog("Selecciona un AWB antes de reproducir una entrada.");
+            return;
+        }
+
+        var selectorMode = SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index";
+        var selectorValue = ((int)(EntryNumberBox.Value ?? 0)).ToString();
+        var previewDirectory = Path.Combine(_audioRoot, "work", "preview");
+        await RunBusyAsync(async () =>
+        {
+            Directory.CreateDirectory(previewDirectory);
+            var result = await RunPythonAsync([
+                "preview-awb-entry",
+                AwbPathTextBox.Text!,
+                "--output",
+                previewDirectory,
+                selectorMode,
+                selectorValue
+            ]);
+            if (result.ExitCode != 0)
+            {
+                AppendLog(result.CombinedOutput);
+                return;
+            }
+
+            var preview = JsonSerializer.Deserialize<PreviewReport>(result.Stdout, JsonOptions());
+            if (string.IsNullOrWhiteSpace(preview?.Wav) || !File.Exists(preview.Wav))
+            {
+                AppendLog("No se pudo preparar el WAV de previsualización.");
+                return;
+            }
+
+            AppendLog($"Previsualización: {preview.Wav}");
+            OpenWithSystemPlayer(preview.Wav);
+        });
+    }
+
     private async void OnExecuteClick(object? sender, RoutedEventArgs e)
     {
         if (!ValidateInputs(out var acbPath, out var awbPath, out var wavPath, out var outputDirectory))
@@ -641,6 +681,7 @@ public sealed partial class MainWindow : Window
     {
         ExecuteButton.IsEnabled = false;
         InspectAwbButton.IsEnabled = false;
+        PreviewEntryButton.IsEnabled = false;
         try
         {
             await action();
@@ -649,6 +690,7 @@ public sealed partial class MainWindow : Window
         {
             ExecuteButton.IsEnabled = true;
             InspectAwbButton.IsEnabled = true;
+            PreviewEntryButton.IsEnabled = true;
         }
     }
 
@@ -723,6 +765,25 @@ public sealed partial class MainWindow : Window
         return candidates.FirstOrDefault(File.Exists) ?? "";
     }
 
+    private static void OpenWithSystemPlayer(string path)
+    {
+        ProcessStartInfo startInfo;
+        if (OperatingSystem.IsMacOS())
+        {
+            startInfo = new ProcessStartInfo("open", [path]);
+        }
+        else if (OperatingSystem.IsWindows())
+        {
+            startInfo = new ProcessStartInfo(path) { UseShellExecute = true };
+        }
+        else
+        {
+            startInfo = new ProcessStartInfo("xdg-open", [path]);
+        }
+
+        Process.Start(startInfo);
+    }
+
     private void AppendLog(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -785,6 +846,12 @@ public sealed partial class MainWindow : Window
         public PreparedWavInfo? PreparedWavInfo { get; set; }
         [JsonPropertyName("checks")]
         public List<ReplaceCheck>? Checks { get; set; }
+    }
+
+    private sealed class PreviewReport
+    {
+        [JsonPropertyName("wav")]
+        public string? Wav { get; set; }
     }
 
     private sealed class PreparedWavInfo
