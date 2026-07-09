@@ -33,6 +33,7 @@ public sealed partial class MainWindow : Window
     private TimeSpan _playbackOffset;
     private DateTime _playbackStartedAt;
     private bool _playbackPaused;
+    private TimelineDragMode _timelineDragMode = TimelineDragMode.None;
 
     public MainWindow()
     {
@@ -47,6 +48,7 @@ public sealed partial class MainWindow : Window
         _uiReady = true;
         UpdateCommandPreview();
         AppendLog($"AUDIO root: {_audioRoot}");
+        _ = EnsurePluginsAsync();
     }
 
     private async void OnBrowseAcbClick(object? sender, RoutedEventArgs e)
@@ -56,6 +58,29 @@ public sealed partial class MainWindow : Window
         {
             AcbPathTextBox.Text = path;
             UpdateCommandPreview();
+        }
+    }
+
+    private async Task EnsurePluginsAsync()
+    {
+        var result = await RunPythonAsync(["ensure-plugins"]);
+        if (result.ExitCode != 0)
+        {
+            AppendLog($"Dependencias: no se pudieron verificar los plugins.\n{result.CombinedOutput}");
+            return;
+        }
+
+        var report = JsonSerializer.Deserialize<PluginReport>(result.Stdout, JsonOptions());
+        foreach (var check in report?.Checks ?? [])
+        {
+            if (check.Available)
+            {
+                AppendLog($"Plugin OK: {check.Name} ({check.Source}) {check.Path}");
+            }
+            else
+            {
+                AppendLog($"Plugin no disponible: {check.Name}. {check.Error}");
+            }
         }
     }
 
@@ -399,7 +424,7 @@ public sealed partial class MainWindow : Window
         UpdateCommandPreview();
     }
 
-    private void OnLoopCanvasSizeChanged(object? sender, SizeChangedEventArgs e)
+    private void OnLoopTimelineSizeChanged(object? sender, SizeChangedEventArgs e)
     {
         if (!_uiReady)
         {
@@ -409,15 +434,15 @@ public sealed partial class MainWindow : Window
         UpdateLoopVisuals();
     }
 
-    private void OnLoopCanvasPointerPressed(object? sender, PointerPressedEventArgs e)
+    private void OnLoopTimelinePointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (_wavSamples <= 0)
         {
             return;
         }
 
-        var x = e.GetPosition(LoopCanvas).X;
-        var sample = XToSample(x);
+        var x = e.GetPosition(LoopTimeline).X;
+        var sample = LoopTimeline.XToSample(x);
         if (LoopModeComboBox.SelectedIndex == 2)
         {
             LoopModeComboBox.SelectedIndex = 1;
@@ -425,6 +450,8 @@ public sealed partial class MainWindow : Window
             var startSample = Math.Clamp(sample, 0, Math.Max(0, _wavSamples - 1));
             LoopStartBox.Value = startSample;
             LoopEndBox.Value = Math.Clamp(startSample + length, startSample + 1, _wavSamples);
+            _timelineDragMode = TimelineDragMode.End;
+            e.Pointer.Capture(LoopTimeline);
             return;
         }
 
@@ -434,6 +461,29 @@ public sealed partial class MainWindow : Window
         if (Math.Abs(sample - start) <= Math.Abs(sample - end))
         {
             LoopStartBox.Value = Math.Clamp(sample, 0, Math.Max(0, end - 1));
+            _timelineDragMode = TimelineDragMode.Start;
+        }
+        else
+        {
+            LoopEndBox.Value = Math.Clamp(sample, Math.Min(_wavSamples, start + 1), _wavSamples);
+            _timelineDragMode = TimelineDragMode.End;
+        }
+        e.Pointer.Capture(LoopTimeline);
+    }
+
+    private void OnLoopTimelinePointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (_timelineDragMode == TimelineDragMode.None || _wavSamples <= 0)
+        {
+            return;
+        }
+
+        var sample = LoopTimeline.XToSample(e.GetPosition(LoopTimeline).X);
+        var start = (int)(LoopStartBox.Value ?? 0);
+        var end = (int)(LoopEndBox.Value ?? _wavSamples);
+        if (_timelineDragMode == TimelineDragMode.Start)
+        {
+            LoopStartBox.Value = Math.Clamp(sample, 0, Math.Max(0, end - 1));
         }
         else
         {
@@ -441,30 +491,15 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OnLoopStartDragDelta(object? sender, VectorEventArgs e)
+    private void OnLoopTimelinePointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        if (_wavSamples <= 0)
-        {
-            return;
-        }
-
-        LoopModeComboBox.SelectedIndex = 1;
-        var start = (int)(LoopStartBox.Value ?? 0);
-        var end = (int)(LoopEndBox.Value ?? _wavSamples);
-        LoopStartBox.Value = Math.Clamp(start + DeltaToSamples(e.Vector.X), 0, Math.Max(0, end - 1));
+        _timelineDragMode = TimelineDragMode.None;
+        e.Pointer.Capture(null);
     }
 
-    private void OnLoopEndDragDelta(object? sender, VectorEventArgs e)
+    private void OnLoopTimelinePointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
     {
-        if (_wavSamples <= 0)
-        {
-            return;
-        }
-
-        LoopModeComboBox.SelectedIndex = 1;
-        var start = (int)(LoopStartBox.Value ?? 0);
-        var end = (int)(LoopEndBox.Value ?? _wavSamples);
-        LoopEndBox.Value = Math.Clamp(end + DeltaToSamples(e.Vector.X), Math.Min(_wavSamples, start + 1), _wavSamples);
+        _timelineDragMode = TimelineDragMode.None;
     }
 
     private async Task LoadWavInfoAsync(string path)
@@ -478,6 +513,7 @@ public sealed partial class MainWindow : Window
             _wavSampleRate = 0;
             _wavLoopStart = null;
             _wavLoopEnd = null;
+            LoopTimeline.Peaks = [];
             LoopModeComboBox.SelectedIndex = 2;
             SetLoopEnabled(false);
             UpdateLoopVisuals();
@@ -490,6 +526,7 @@ public sealed partial class MainWindow : Window
         _wavSampleRate = info?.SampleRate ?? 0;
         _wavLoopStart = info?.Loop?.Start;
         _wavLoopEnd = info?.Loop?.End;
+        LoopTimeline.Peaks = info?.Peaks ?? [];
 
         _updatingLoopControls = true;
         LoopStartBox.Maximum = Math.Max(0, _wavSamples);
@@ -645,25 +682,13 @@ public sealed partial class MainWindow : Window
 
     private void UpdateLoopVisuals()
     {
-        var width = LoopCanvas.Bounds.Width;
-        if (width <= 1 || _wavSamples <= 0)
-        {
-            Canvas.SetLeft(LoopSelectionBorder, 0);
-            LoopSelectionBorder.Width = 0;
-            PlayerProgressBorder.Width = 0;
-            Canvas.SetLeft(PlayerPositionBorder, 0);
-            return;
-        }
-
         var start = LoopModeComboBox.SelectedIndex == 2 ? 0 : (int)(LoopStartBox.Value ?? 0);
         var end = LoopModeComboBox.SelectedIndex == 2 ? 0 : (int)(LoopEndBox.Value ?? _wavSamples);
-        var startX = SampleToX(start);
-        var endX = SampleToX(end);
 
-        Canvas.SetLeft(LoopSelectionBorder, startX);
-        LoopSelectionBorder.Width = Math.Max(0, endX - startX);
-        Canvas.SetLeft(LoopStartThumb, Math.Clamp(startX - LoopStartThumb.Width / 2, 0, Math.Max(0, width - LoopStartThumb.Width)));
-        Canvas.SetLeft(LoopEndThumb, Math.Clamp(endX - LoopEndThumb.Width / 2, 0, Math.Max(0, width - LoopEndThumb.Width)));
+        LoopTimeline.TotalSamples = _wavSamples;
+        LoopTimeline.LoopStart = start;
+        LoopTimeline.LoopEnd = end;
+        LoopTimeline.HasLoop = LoopModeComboBox.SelectedIndex != 2 && _wavSamples > 0 && end > start;
         UpdatePlaybackVisuals();
         LoopSummaryTextBlock.Text = _wavSamples <= 0
             ? "Carga un WAV para ver duración y loop."
@@ -674,9 +699,7 @@ public sealed partial class MainWindow : Window
     {
         LoopStartBox.IsEnabled = enabled;
         LoopEndBox.IsEnabled = enabled;
-        LoopStartThumb.IsEnabled = enabled;
-        LoopEndThumb.IsEnabled = enabled;
-        LoopCanvas.Opacity = _wavSamples > 0 ? 1 : 0.45;
+        LoopTimeline.Opacity = _wavSamples > 0 ? 1 : 0.45;
     }
 
     private void SetPlayerSource(string path)
@@ -821,25 +844,15 @@ public sealed partial class MainWindow : Window
 
     private void UpdatePlaybackVisuals()
     {
-        if (LoopCanvas is null || PlayerProgressBorder is null || PlayerPositionBorder is null)
+        if (LoopTimeline is null)
         {
-            return;
-        }
-
-        var width = LoopCanvas.Bounds.Width;
-        if (width <= 1 || _wavSamples <= 0)
-        {
-            PlayerProgressBorder.Width = 0;
-            Canvas.SetLeft(PlayerPositionBorder, 0);
             return;
         }
 
         var duration = AudioDuration();
         var progress = duration <= TimeSpan.Zero ? 0 : CurrentPlaybackPosition().TotalSeconds / duration.TotalSeconds;
         progress = Math.Clamp(progress, 0, 1);
-        var x = width * progress;
-        PlayerProgressBorder.Width = x;
-        Canvas.SetLeft(PlayerPositionBorder, Math.Clamp(x, 0, Math.Max(0, width - PlayerPositionBorder.Width)));
+        LoopTimeline.PlayheadSample = _wavSamples <= 0 ? 0 : (int)Math.Round(_wavSamples * progress);
     }
 
     private static void SendSignal(int pid, string signal)
@@ -850,26 +863,6 @@ public sealed partial class MainWindow : Window
             CreateNoWindow = true
         });
         process?.WaitForExit();
-    }
-
-    private double SampleToX(int sample)
-    {
-        return _wavSamples <= 0 ? 0 : LoopCanvas.Bounds.Width * sample / _wavSamples;
-    }
-
-    private int XToSample(double x)
-    {
-        if (_wavSamples <= 0 || LoopCanvas.Bounds.Width <= 0)
-        {
-            return 0;
-        }
-
-        return (int)Math.Round(Math.Clamp(x, 0, LoopCanvas.Bounds.Width) / LoopCanvas.Bounds.Width * _wavSamples);
-    }
-
-    private int DeltaToSamples(double deltaX)
-    {
-        return LoopCanvas.Bounds.Width <= 0 ? 0 : (int)Math.Round(deltaX / LoopCanvas.Bounds.Width * _wavSamples);
     }
 
     private string DescribeLoop()
@@ -1062,6 +1055,8 @@ public sealed partial class MainWindow : Window
         public int SampleRate { get; set; }
         [JsonPropertyName("loop")]
         public WavLoop? Loop { get; set; }
+        [JsonPropertyName("peaks")]
+        public double[] Peaks { get; set; } = [];
     }
 
     private sealed class WavLoop
@@ -1133,5 +1128,32 @@ public sealed partial class MainWindow : Window
                 _ => value.GetRawText()
             };
         }
+    }
+
+    private sealed class PluginReport
+    {
+        [JsonPropertyName("checks")]
+        public List<PluginCheck>? Checks { get; set; }
+    }
+
+    private sealed class PluginCheck
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+        [JsonPropertyName("available")]
+        public bool Available { get; set; }
+        [JsonPropertyName("path")]
+        public string? Path { get; set; }
+        [JsonPropertyName("source")]
+        public string? Source { get; set; }
+        [JsonPropertyName("error")]
+        public string? Error { get; set; }
+    }
+
+    private enum TimelineDragMode
+    {
+        None,
+        Start,
+        End
     }
 }

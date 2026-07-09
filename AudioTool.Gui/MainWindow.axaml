@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Level5.AudioTool.Gui"
         x:Class="Level5.AudioTool.Gui.MainWindow"
         Width="1180"
         Height="820"
@@ -102,39 +103,18 @@
                   <Grid Grid.Row="1" ColumnDefinitions="44,*" ColumnSpacing="10">
                     <Button x:Name="PlaybackButton"
                             Width="40"
-                            Height="36"
+                            Height="58"
                             Content="▶"
                             FontSize="16"
                             Click="OnPlaybackToggleClick" />
-                    <Canvas Grid.Column="1"
-                            x:Name="LoopCanvas"
-                            Height="36"
-                            Background="#202C3030"
-                            PointerPressed="OnLoopCanvasPointerPressed"
-                            SizeChanged="OnLoopCanvasSizeChanged">
-                      <Border x:Name="PlayerProgressBorder"
-                              Height="36"
-                              Background="#365CC8C2" />
-                      <Border x:Name="LoopSelectionBorder"
-                              Height="36"
-                              Background="#805CC8C2"
-                              BorderBrush="#FF8EEAE2"
-                              BorderThickness="1" />
-                      <Thumb x:Name="LoopStartThumb"
-                             Width="16"
-                             Height="36"
-                             Background="#FF8EEAE2"
-                             DragDelta="OnLoopStartDragDelta" />
-                      <Thumb x:Name="LoopEndThumb"
-                             Width="16"
-                             Height="36"
-                             Background="#FFE9C46A"
-                             DragDelta="OnLoopEndDragDelta" />
-                      <Border x:Name="PlayerPositionBorder"
-                              Width="2"
-                              Height="36"
-                              Background="#FFFFFFFF" />
-                    </Canvas>
+                    <local:PlaybackTimeline Grid.Column="1"
+                                            x:Name="LoopTimeline"
+                                            Height="58"
+                                            PointerPressed="OnLoopTimelinePointerPressed"
+                                            PointerMoved="OnLoopTimelinePointerMoved"
+                                            PointerReleased="OnLoopTimelinePointerReleased"
+                                            PointerCaptureLost="OnLoopTimelinePointerCaptureLost"
+                                            SizeChanged="OnLoopTimelineSizeChanged" />
                   </Grid>
                   <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="8">
                     <NumericUpDown x:Name="LoopStartBox"

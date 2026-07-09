@@ -18,9 +18,11 @@ import platform
 import shutil
 import struct
 import subprocess
+import tarfile
 import tempfile
 import urllib.request
 import wave
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -32,6 +34,7 @@ USM_MAGIC = b"CRID"
 HCA_MAGIC = b"HCA\x00"
 ENCRYPTED_HCA_MAGIC = bytes([0xC8, 0xC3, 0xC1, 0x00])
 FFMPEG_RELEASE_BASE = "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0"
+VGMSTREAM_RELEASE_API = "https://api.github.com/repos/vgmstream/vgmstream-releases/releases/latest"
 FFMPEG_ASSETS = {
     "darwin-arm64": ("ffmpeg-darwin-arm64.gz", "6be74d6f449889c2e87a75873894f8520cad56c08ac76f2a628d85b0519daaca"),
     "linux-x64": ("ffmpeg-linux-x64.gz", "17c1ae10b52ac499180679fe6ba77e17642390c4eedb0f1e3b0ac045da55128f"),
@@ -583,12 +586,46 @@ def wav_info(path: Path) -> dict[str, Any]:
         "channels": channels,
         "sample_width_bytes": sample_width,
         "duration_seconds": sample_count / sample_rate if sample_rate > 0 else 0,
+        "peaks": wav_peaks(path),
         "loop": None if loop is None else {
             "start": loop[0],
             "end": loop[1],
             "duration_samples": loop[1] - loop[0],
         },
     }
+
+
+def wav_peaks(path: Path, buckets: int = 512) -> list[float]:
+    with wave.open(str(path), "rb") as wav:
+        frame_count = wav.getnframes()
+        channels = max(1, wav.getnchannels())
+        sample_width = wav.getsampwidth()
+        if frame_count <= 0 or sample_width not in (1, 2, 3, 4):
+            return []
+
+        frames_per_bucket = max(1, frame_count // buckets)
+        peaks: list[float] = []
+        max_value = float((1 << (sample_width * 8 - 1)) - 1) if sample_width > 1 else 128.0
+        remaining = frame_count
+        while remaining > 0 and len(peaks) < buckets:
+            take = min(frames_per_bucket, remaining)
+            data = wav.readframes(take)
+            remaining -= take
+            peak = 0
+            step = sample_width
+            for offset in range(0, len(data), step):
+                sample_bytes = data[offset:offset + step]
+                if len(sample_bytes) != sample_width:
+                    continue
+                if sample_width == 1:
+                    value = abs(sample_bytes[0] - 128)
+                else:
+                    value = abs(int.from_bytes(sample_bytes, "little", signed=True))
+                if value > peak:
+                    peak = value
+            peaks.append(min(1.0, peak / max_value))
+
+        return peaks
 
 
 def wav_smpl_loop(path: Path) -> tuple[int, int] | None:
@@ -764,6 +801,107 @@ def resolve_vgmstream(explicit: str | None = None) -> tuple[str | None, str]:
             return str(candidate), "existing"
 
     return None, "missing"
+
+
+def bundled_vgmstream_destination() -> Path:
+    system = platform.system().lower()
+    if system == "windows":
+        return audio_root() / "PlugIns" / "Windows" / "vgmstream-cli.exe"
+    if system == "linux":
+        return audio_root() / "PlugIns" / "Linux" / "vgmstream-cli"
+    return audio_root() / "PlugIns" / "Mac" / "vgmstream-cli"
+
+
+def find_l5decompiler_vgmstream() -> Path | None:
+    l5_root = find_l5decompiler_root()
+    if l5_root is None:
+        return None
+
+    system = platform.system().lower()
+    if system == "windows":
+        candidates = [l5_root / "PlugIns" / "Windows" / "vgmstream-cli.exe"]
+    elif system == "linux":
+        candidates = [l5_root / "PlugIns" / "Linux" / "vgmstream-cli"]
+    else:
+        candidates = [l5_root / "PlugIns" / "Mac" / "vgmstream-cli"]
+
+    for candidate in candidates:
+        if candidate.exists() and vgmstream_available(candidate):
+            return candidate
+    return None
+
+
+def integrate_vgmstream_from_l5decompiler() -> tuple[str | None, str]:
+    source = find_l5decompiler_vgmstream()
+    if source is None:
+        return None, "missing"
+
+    destination = bundled_vgmstream_destination()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.resolve() != destination.resolve():
+        shutil.copy2(source, destination)
+    if platform.system().lower() != "windows":
+        destination.chmod(destination.stat().st_mode | 0o755)
+    if vgmstream_available(destination):
+        return str(destination), "copied-from-l5decompiler"
+    return None, "copy-failed"
+
+
+def vgmstream_asset_name() -> str:
+    system = platform.system().lower()
+    if system == "windows":
+        return "vgmstream-win64.zip"
+    if system == "linux":
+        return "vgmstream-linux-cli.tar.gz"
+    if system == "darwin":
+        return "vgmstream-mac-cli.tar.gz"
+    raise RuntimeError(f"Unsupported platform for vgmstream: {platform.system()} {platform.machine()}")
+
+
+def download_vgmstream() -> tuple[str | None, str]:
+    asset_name = vgmstream_asset_name()
+    cache_dir = audio_root() / ".cache" / "dependencies" / "vgmstream"
+    extract_dir = cache_dir / "extract"
+    archive_path = cache_dir / asset_name
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    with urllib.request.urlopen(VGMSTREAM_RELEASE_API, timeout=30) as response:
+        release = json.load(response)
+    assets = release.get("assets") or []
+    asset = next((item for item in assets if item.get("name") == asset_name), None)
+    if asset is None:
+        return None, "download-asset-missing"
+
+    download_url = asset.get("browser_download_url")
+    if not download_url:
+        return None, "download-url-missing"
+
+    urllib.request.urlretrieve(download_url, archive_path)
+
+    shutil.rmtree(extract_dir)
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    if asset_name.endswith(".zip"):
+        with zipfile.ZipFile(archive_path) as archive:
+            archive.extractall(extract_dir)
+    else:
+        with tarfile.open(archive_path, "r:gz") as archive:
+            archive.extractall(extract_dir)
+
+    executable_name = "vgmstream-cli.exe" if platform.system().lower() == "windows" else "vgmstream-cli"
+    executable = next((path for path in extract_dir.rglob(executable_name) if path.is_file()), None)
+    if executable is None:
+        return None, "download-executable-missing"
+
+    destination = bundled_vgmstream_destination()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(executable, destination)
+    if platform.system().lower() != "windows":
+        destination.chmod(destination.stat().st_mode | 0o755)
+
+    if vgmstream_available(destination):
+        return str(destination), "downloaded"
+    return None, "download-invalid"
 
 
 def resolve_cri_hca_encoder(explicit: str | None = None) -> tuple[Path | None, str]:
@@ -1122,6 +1260,44 @@ def cmd_inspect(args: argparse.Namespace) -> None:
 def cmd_wav_info(args: argparse.Namespace) -> None:
     source = Path(args.source)
     print(json.dumps(wav_info(source), ensure_ascii=False, indent=2))
+
+
+def cmd_ensure_plugins(args: argparse.Namespace) -> None:
+    checks: list[dict[str, Any]] = []
+
+    vgmstream_path, vgmstream_source = resolve_vgmstream(args.vgmstream)
+    if vgmstream_path is None:
+        vgmstream_path, vgmstream_source = integrate_vgmstream_from_l5decompiler()
+    if vgmstream_path is None and not args.no_vgmstream_download:
+        try:
+            vgmstream_path, vgmstream_source = download_vgmstream()
+        except Exception as exc:
+            vgmstream_source = f"download-failed: {exc}"
+    checks.append({
+        "name": "vgmstream-cli",
+        "available": vgmstream_path is not None,
+        "path": vgmstream_path,
+        "source": vgmstream_source,
+    })
+
+    try:
+        ffmpeg_path, ffmpeg_source = resolve_ffmpeg(download=not args.no_ffmpeg_download)
+        checks.append({
+            "name": "ffmpeg",
+            "available": True,
+            "path": ffmpeg_path,
+            "source": ffmpeg_source,
+        })
+    except Exception as exc:
+        checks.append({
+            "name": "ffmpeg",
+            "available": False,
+            "path": None,
+            "source": "missing",
+            "error": str(exc),
+        })
+
+    print(json.dumps({"checks": checks}, ensure_ascii=False, indent=2))
 
 
 def cmd_unpack_awb(args: argparse.Namespace) -> None:
@@ -1688,6 +1864,12 @@ def build_parser() -> argparse.ArgumentParser:
     wav_info_parser = subparsers.add_parser("wav-info", help="Read WAV duration and first smpl loop.")
     wav_info_parser.add_argument("source")
     wav_info_parser.set_defaults(func=cmd_wav_info)
+
+    plugins_parser = subparsers.add_parser("ensure-plugins", help="Verify and integrate preview/transcode helper tools.")
+    plugins_parser.add_argument("--vgmstream", help="Path to vgmstream-cli.")
+    plugins_parser.add_argument("--no-vgmstream-download", action="store_true", help="Do not download vgmstream-cli if it is missing.")
+    plugins_parser.add_argument("--no-ffmpeg-download", action="store_true", help="Do not download FFmpeg if it is missing.")
+    plugins_parser.set_defaults(func=cmd_ensure_plugins)
 
     unpack_parser = subparsers.add_parser("unpack-awb", help="Extract AWB entries and write a manifest.")
     unpack_parser.add_argument("source")
