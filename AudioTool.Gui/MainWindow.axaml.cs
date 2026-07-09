@@ -21,7 +21,9 @@ public sealed partial class MainWindow : Window
 {
     private readonly ObservableCollection<AwbEntryViewModel> _awbEntries = new();
     private readonly string _audioRoot;
+    private readonly string _preferencesPath;
     private bool _uiReady;
+    private bool _loadingPreferences;
     private bool _updatingLoopControls;
     private int _wavSamples;
     private int _wavSampleRate;
@@ -41,13 +43,19 @@ public sealed partial class MainWindow : Window
         _playbackTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _playbackTimer.Tick += OnPlaybackTimerTick;
         _audioRoot = ResolveAudioRoot();
+        _preferencesPath = Path.Combine(_audioRoot, "config", "user_preferences.json");
         AwbEntriesGrid.ItemsSource = _awbEntries;
         OutputDirectoryTextBox.Text = Path.Combine(_audioRoot, "work");
         CriEncoderPathTextBox.Text = ResolveDefaultCriEncoderPath();
+        KeepHcaCheckBox.IsCheckedChanged += OnPreferenceChanged;
+        PatchWaveformCheckBox.IsCheckedChanged += OnPreferenceChanged;
+        LoadPreferences();
         SetLoopEnabled(false);
         _uiReady = true;
         UpdateCommandPreview();
         AppendLog($"AUDIO root: {_audioRoot}");
+        AppendLog($"Preferencias: {_preferencesPath}");
+        _ = RestoreSelectedAudioAsync();
         _ = EnsurePluginsAsync();
     }
 
@@ -57,6 +65,7 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(path))
         {
             AcbPathTextBox.Text = path;
+            SavePreferences();
             UpdateCommandPreview();
         }
     }
@@ -86,6 +95,7 @@ public sealed partial class MainWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        SavePreferences();
         StopPlayback();
         base.OnClosed(e);
     }
@@ -96,6 +106,7 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(path))
         {
             AwbPathTextBox.Text = path;
+            SavePreferences();
             UpdateCommandPreview();
         }
     }
@@ -114,6 +125,7 @@ public sealed partial class MainWindow : Window
         {
             SetPlayerSource(path);
         }
+        SavePreferences();
         UpdateCommandPreview();
     }
 
@@ -128,6 +140,7 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(path))
         {
             OutputDirectoryTextBox.Text = path;
+            SavePreferences();
             UpdateCommandPreview();
         }
     }
@@ -138,6 +151,7 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(path))
         {
             CriEncoderPathTextBox.Text = path;
+            SavePreferences();
             UpdateCommandPreview();
         }
     }
@@ -382,6 +396,7 @@ public sealed partial class MainWindow : Window
 
         SetLoopEnabled(LoopModeComboBox.SelectedIndex == 1 || LoopModeComboBox.SelectedIndex == 0 && _wavLoopStart is not null);
         UpdateLoopVisuals();
+        SavePreferences();
         UpdateCommandPreview();
     }
 
@@ -392,6 +407,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        SavePreferences();
         UpdateCommandPreview();
     }
 
@@ -402,6 +418,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        SavePreferences();
         UpdateCommandPreview();
     }
 
@@ -409,6 +426,7 @@ public sealed partial class MainWindow : Window
     {
         ApplyWavLoop();
         LoopModeComboBox.SelectedIndex = _wavLoopStart is null ? 2 : 0;
+        SavePreferences();
         UpdateCommandPreview();
     }
 
@@ -421,6 +439,7 @@ public sealed partial class MainWindow : Window
 
         NormalizeLoopNumbers();
         UpdateLoopVisuals();
+        SavePreferences();
         UpdateCommandPreview();
     }
 
@@ -452,6 +471,7 @@ public sealed partial class MainWindow : Window
             LoopEndBox.Value = Math.Clamp(startSample + length, startSample + 1, _wavSamples);
             _timelineDragMode = TimelineDragMode.End;
             e.Pointer.Capture(LoopTimeline);
+            SavePreferences();
             return;
         }
 
@@ -469,6 +489,7 @@ public sealed partial class MainWindow : Window
             _timelineDragMode = TimelineDragMode.End;
         }
         e.Pointer.Capture(LoopTimeline);
+        SavePreferences();
     }
 
     private void OnLoopTimelinePointerMoved(object? sender, PointerEventArgs e)
@@ -489,6 +510,7 @@ public sealed partial class MainWindow : Window
         {
             LoopEndBox.Value = Math.Clamp(sample, Math.Min(_wavSamples, start + 1), _wavSamples);
         }
+        SavePreferences();
     }
 
     private void OnLoopTimelinePointerReleased(object? sender, PointerReleasedEventArgs e)
@@ -908,6 +930,124 @@ public sealed partial class MainWindow : Window
         return files.Count > 0 ? files[0].TryGetLocalPath() : null;
     }
 
+    private async Task RestoreSelectedAudioAsync()
+    {
+        var path = WavPathTextBox.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return;
+        }
+
+        var loopModeIndex = Math.Clamp(LoopModeComboBox.SelectedIndex, 0, 2);
+        var loopStart = (int)(LoopStartBox.Value ?? 0);
+        var loopEnd = (int)(LoopEndBox.Value ?? 0);
+        try
+        {
+            _loadingPreferences = true;
+            await LoadWavInfoAsync(path);
+            if (_wavSamples > 0)
+            {
+                LoopModeComboBox.SelectedIndex = loopModeIndex;
+                if (loopModeIndex == 1)
+                {
+                    LoopStartBox.Value = Math.Clamp(loopStart, 0, Math.Max(0, _wavSamples - 1));
+                    LoopEndBox.Value = Math.Clamp(loopEnd, Math.Min(_wavSamples, loopStart + 1), _wavSamples);
+                }
+                SetLoopEnabled(loopModeIndex == 1 || loopModeIndex == 0 && _wavLoopStart is not null);
+                UpdateLoopVisuals();
+                SetPlayerSource(path);
+            }
+        }
+        finally
+        {
+            _loadingPreferences = false;
+        }
+    }
+
+    private void LoadPreferences()
+    {
+        if (!File.Exists(_preferencesPath))
+        {
+            return;
+        }
+
+        try
+        {
+            _loadingPreferences = true;
+            var json = File.ReadAllText(_preferencesPath);
+            var preferences = JsonSerializer.Deserialize<UserPreferences>(json, PreferenceJsonOptions());
+            if (preferences is null)
+            {
+                return;
+            }
+
+            AcbPathTextBox.Text = preferences.AcbPath ?? "";
+            AwbPathTextBox.Text = preferences.AwbPath ?? "";
+            WavPathTextBox.Text = preferences.AudioPath ?? "";
+            OutputDirectoryTextBox.Text = string.IsNullOrWhiteSpace(preferences.OutputDirectory)
+                ? Path.Combine(_audioRoot, "work")
+                : preferences.OutputDirectory;
+            CriEncoderPathTextBox.Text = string.IsNullOrWhiteSpace(preferences.CriEncoderPath)
+                ? ResolveDefaultCriEncoderPath()
+                : preferences.CriEncoderPath;
+            SelectorModeComboBox.SelectedIndex = Math.Clamp(preferences.SelectorModeIndex, 0, 1);
+            EntryNumberBox.Value = Math.Clamp(preferences.EntryNumber, 0, 999999);
+            LoopModeComboBox.SelectedIndex = Math.Clamp(preferences.LoopModeIndex, 0, 2);
+            LoopStartBox.Value = Math.Max(0, preferences.LoopStart);
+            LoopEndBox.Value = Math.Max(0, preferences.LoopEnd);
+            KeepHcaCheckBox.IsChecked = preferences.KeepHca;
+            PatchWaveformCheckBox.IsChecked = preferences.PatchWaveform;
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"No se pudieron cargar preferencias: {ex.Message}");
+        }
+        finally
+        {
+            _loadingPreferences = false;
+        }
+    }
+
+    private void SavePreferences()
+    {
+        if (!_uiReady || _loadingPreferences)
+        {
+            return;
+        }
+
+        try
+        {
+            var preferences = new UserPreferences
+            {
+                AcbPath = AcbPathTextBox.Text?.Trim() ?? "",
+                AwbPath = AwbPathTextBox.Text?.Trim() ?? "",
+                AudioPath = WavPathTextBox.Text?.Trim() ?? "",
+                OutputDirectory = OutputDirectoryTextBox.Text?.Trim() ?? "",
+                CriEncoderPath = CriEncoderPathTextBox.Text?.Trim() ?? "",
+                SelectorModeIndex = Math.Clamp(SelectorModeComboBox.SelectedIndex, 0, 1),
+                EntryNumber = (int)(EntryNumberBox.Value ?? 0),
+                LoopModeIndex = Math.Clamp(LoopModeComboBox.SelectedIndex, 0, 2),
+                LoopStart = (int)(LoopStartBox.Value ?? 0),
+                LoopEnd = (int)(LoopEndBox.Value ?? 0),
+                KeepHca = KeepHcaCheckBox.IsChecked == true,
+                PatchWaveform = PatchWaveformCheckBox.IsChecked == true
+            };
+
+            Directory.CreateDirectory(Path.GetDirectoryName(_preferencesPath)!);
+            File.WriteAllText(_preferencesPath, JsonSerializer.Serialize(preferences, PreferenceJsonOptions()));
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"No se pudieron guardar preferencias: {ex.Message}");
+        }
+    }
+
+    private void OnPreferenceChanged(object? sender, RoutedEventArgs e)
+    {
+        SavePreferences();
+        UpdateCommandPreview();
+    }
+
     private async Task RunBusyAsync(Func<Task> action)
     {
         ExecuteButton.IsEnabled = false;
@@ -955,6 +1095,15 @@ public sealed partial class MainWindow : Window
     private static JsonSerializerOptions JsonOptions()
     {
         return new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+    }
+
+    private static JsonSerializerOptions PreferenceJsonOptions()
+    {
+        return new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            WriteIndented = true
+        };
     }
 
     private static string ResolvePython()
@@ -1032,6 +1181,22 @@ public sealed partial class MainWindow : Window
     }
 
     private sealed record AwbEntryViewModel(int Index, int Id, string Extension, long Size, string Sha1);
+
+    private sealed class UserPreferences
+    {
+        public string AcbPath { get; set; } = "";
+        public string AwbPath { get; set; } = "";
+        public string AudioPath { get; set; } = "";
+        public string OutputDirectory { get; set; } = "";
+        public string CriEncoderPath { get; set; } = "";
+        public int SelectorModeIndex { get; set; }
+        public int EntryNumber { get; set; }
+        public int LoopModeIndex { get; set; }
+        public int LoopStart { get; set; }
+        public int LoopEnd { get; set; }
+        public bool KeepHca { get; set; } = true;
+        public bool PatchWaveform { get; set; }
+    }
 
     private sealed class AwbMetadata
     {
