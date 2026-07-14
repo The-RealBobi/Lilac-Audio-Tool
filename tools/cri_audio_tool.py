@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Small CRI ACB/AWB inspection and AWB replacement tool.
 
-This is intentionally conservative: source files are never modified in place.
-The implementation mirrors the proven parsing rules used by L5Decompiler, but
-keeps write support limited to AFS2/AWB repacking.
+This is intentionally conservative: source files are never modified in place,
+and write support stays limited to AFS2/AWB repacking.
 """
 
 from __future__ import annotations
@@ -142,7 +141,7 @@ def crc32_filename_key(filename: str) -> int:
 
 
 def decrypt_readable_copy(data: bytes, filename: str) -> bytes:
-    """Apply the CRI readable-copy XOR used by L5Decompiler when needed."""
+    """Apply the CRI readable-copy XOR when needed."""
     expected_magic = {
         ".acb": ACB_MAGIC,
         ".awb": AWB_MAGIC,
@@ -694,17 +693,6 @@ def data_root() -> Path:
     return audio_root()
 
 
-def find_l5decompiler_root() -> Path | None:
-    candidates = [
-        Path("/Users/bobi/Documents/GitHub/L5Decompiler"),
-        audio_root().parent.parent / "GitHub" / "L5Decompiler",
-    ]
-    for candidate in candidates:
-        if (candidate / "L5Extractor.sln").exists():
-            return candidate
-    return None
-
-
 def ffmpeg_platform_key() -> str:
     system = platform.system().lower()
     machine = platform.machine().lower()
@@ -783,13 +771,6 @@ def resolve_ffmpeg(download: bool = True) -> tuple[str, str]:
     ])
     candidates.extend(plugin_executables(data_root() / "PlugIns", ("ffmpeg", "ffmpeg.exe")))
     candidates.extend(plugin_executables(audio_root() / "PlugIns", ("ffmpeg", "ffmpeg.exe")))
-    if find_l5decompiler_root() is not None:
-        l5_root = find_l5decompiler_root()
-        candidates.extend([
-            l5_root / ".cache" / "dependencies" / ("ffmpeg.exe" if platform.system().lower() == "windows" else "ffmpeg"),
-            l5_root / "PlugIns" / ("ffmpeg.exe" if platform.system().lower() == "windows" else "ffmpeg"),
-        ])
-
     for candidate in candidates:
         if tool_available(candidate, ["-version"]):
             return str(candidate), "existing"
@@ -836,14 +817,6 @@ def resolve_vgmstream(explicit: str | None = None) -> tuple[str | None, str]:
     ])
     candidates.extend(plugin_executables(data_root() / "PlugIns", ("vgmstream-cli", "vgmstream-cli.exe")))
     candidates.extend(plugin_executables(audio_root() / "PlugIns", ("vgmstream-cli", "vgmstream-cli.exe")))
-    l5_root = find_l5decompiler_root()
-    if l5_root is not None:
-        candidates.extend([
-            l5_root / "PlugIns" / "Mac" / "vgmstream-cli",
-            l5_root / "PlugIns" / "Linux" / "vgmstream-cli",
-            l5_root / "PlugIns" / "Windows" / "vgmstream-cli.exe",
-        ])
-
     for candidate in candidates:
         if vgmstream_available(candidate):
             return str(candidate), "existing"
@@ -868,38 +841,6 @@ def copy_vgmstream_bundle(source_executable: Path, destination_executable: Path)
             shutil.copy2(dependency, destination_executable.parent / dependency.name)
     else:
         destination_executable.chmod(destination_executable.stat().st_mode | 0o755)
-
-
-def find_l5decompiler_vgmstream() -> Path | None:
-    l5_root = find_l5decompiler_root()
-    if l5_root is None:
-        return None
-
-    system = platform.system().lower()
-    if system == "windows":
-        candidates = [l5_root / "PlugIns" / "Windows" / "vgmstream-cli.exe"]
-    elif system == "linux":
-        candidates = [l5_root / "PlugIns" / "Linux" / "vgmstream-cli"]
-    else:
-        candidates = [l5_root / "PlugIns" / "Mac" / "vgmstream-cli"]
-
-    for candidate in candidates:
-        if candidate.exists() and vgmstream_available(candidate):
-            return candidate
-    return None
-
-
-def integrate_vgmstream_from_l5decompiler() -> tuple[str | None, str]:
-    source = find_l5decompiler_vgmstream()
-    if source is None:
-        return None, "missing"
-
-    destination = bundled_vgmstream_destination()
-    if source.resolve() != destination.resolve():
-        copy_vgmstream_bundle(source, destination)
-    if vgmstream_available(destination):
-        return str(destination), "copied-from-l5decompiler"
-    return None, "copy-failed"
 
 
 def vgmstream_asset_name() -> str:
@@ -1256,8 +1197,6 @@ def cmd_ensure_plugins(args: argparse.Namespace) -> None:
     checks: list[dict[str, Any]] = []
 
     vgmstream_path, vgmstream_source = resolve_vgmstream(args.vgmstream)
-    if vgmstream_path is None:
-        vgmstream_path, vgmstream_source = integrate_vgmstream_from_l5decompiler()
     if vgmstream_path is None and not args.no_vgmstream_download:
         try:
             vgmstream_path, vgmstream_source = download_vgmstream()
