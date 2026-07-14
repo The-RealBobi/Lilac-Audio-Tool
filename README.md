@@ -27,6 +27,7 @@ Common first-run issues:
 - If Python is installed in a non-standard location, set `L5_AUDIO_PYTHON`.
 - If Homebrew/portable tools are not visible to GUI apps, set `L5_AUDIO_FFMPEG_PATH` and/or `L5_AUDIO_VGMSTREAM_PATH`.
 - The plugin scan checks PATH, common Homebrew paths, `PlugIns/` beside the app, and `PlugIns/` in the user data folder, including nested plugin folders.
+- On Windows, vgmstream must keep `vgmstream-cli.exe` together with its companion DLLs. If an older run copied only the EXE, delete `LilacAudioTool/PlugIns/Windows/` and launch the tool again.
 - No licensed CRI encoder is required or auto-detected; encoding is handled by the bundled helper invoked from the Python backend.
 
 ## Run GUI

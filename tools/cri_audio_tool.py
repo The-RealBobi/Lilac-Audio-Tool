@@ -739,6 +739,10 @@ def vgmstream_available(path: str | Path) -> bool:
             candidate = resolved
         if os.path.isabs(candidate) and not Path(candidate).exists():
             return False
+        if Path(candidate).suffix.lower() == ".exe":
+            required = ("avcodec-vgmstream-59.dll", "avformat-vgmstream-59.dll", "avutil-vgmstream-57.dll")
+            if not all((Path(candidate).parent / name).exists() for name in required):
+                return False
         result = subprocess.run([candidate, "-h"], capture_output=True, text=True, timeout=3)
         output = f"{result.stdout}\n{result.stderr}".lower()
         return "vgmstream" in output
@@ -856,6 +860,16 @@ def bundled_vgmstream_destination() -> Path:
     return data_root() / "PlugIns" / "Mac" / "vgmstream-cli"
 
 
+def copy_vgmstream_bundle(source_executable: Path, destination_executable: Path) -> None:
+    destination_executable.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_executable, destination_executable)
+    if source_executable.suffix.lower() == ".exe":
+        for dependency in source_executable.parent.glob("*.dll"):
+            shutil.copy2(dependency, destination_executable.parent / dependency.name)
+    else:
+        destination_executable.chmod(destination_executable.stat().st_mode | 0o755)
+
+
 def find_l5decompiler_vgmstream() -> Path | None:
     l5_root = find_l5decompiler_root()
     if l5_root is None:
@@ -881,11 +895,8 @@ def integrate_vgmstream_from_l5decompiler() -> tuple[str | None, str]:
         return None, "missing"
 
     destination = bundled_vgmstream_destination()
-    destination.parent.mkdir(parents=True, exist_ok=True)
     if source.resolve() != destination.resolve():
-        shutil.copy2(source, destination)
-    if platform.system().lower() != "windows":
-        destination.chmod(destination.stat().st_mode | 0o755)
+        copy_vgmstream_bundle(source, destination)
     if vgmstream_available(destination):
         return str(destination), "copied-from-l5decompiler"
     return None, "copy-failed"
@@ -938,10 +949,7 @@ def download_vgmstream() -> tuple[str | None, str]:
         return None, "download-executable-missing"
 
     destination = bundled_vgmstream_destination()
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(executable, destination)
-    if platform.system().lower() != "windows":
-        destination.chmod(destination.stat().st_mode | 0o755)
+    copy_vgmstream_bundle(executable, destination)
 
     if vgmstream_available(destination):
         return str(destination), "downloaded"
