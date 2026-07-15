@@ -1170,6 +1170,7 @@ def build_replace_checks(
     hca_report: dict[str, Any],
     loop_start: int | None,
     loop_end: int | None,
+    loop_source: str,
 ) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
     original = original_hca.get("Hca") or {}
@@ -1200,6 +1201,12 @@ def build_replace_checks(
         "loop_end": loop_end,
         "prepared_samples": prepared_info.get("sample_count"),
     })
+    if loop_source == "disabled-hca-loop-preserve-duration":
+        checks.append({
+            "name": "hca_loop",
+            "status": "warning",
+            "reason": "HCA loop metadata was not written because the current encoder trims the file to LoopEnd.",
+        })
     original_samples = int(original.get("SampleCount") or 0)
     effective_samples = int(hca_report.get("hcaSampleCount") or prepared_info.get("sample_count") or 0) if isinstance(hca_report, dict) else int(prepared_info.get("sample_count") or 0)
     duration_ratio = effective_samples / original_samples if original_samples > 0 else None
@@ -1522,7 +1529,7 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
         input_loop_source = "none"
         try:
             input_loop_start, input_loop_end, input_loop_source = resolve_loop_points(args, wav_path)
-            input_info = wav_info(wav_path)
+            input_info = audio_info(wav_path)
         except Exception:
             input_info = {"path": str(wav_path), "loop": None}
             if args.loop_start is not None or args.loop_end is not None:
@@ -1555,7 +1562,12 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
             command.extend(["--bitrate", str(bitrate)])
         if args.key:
             command.extend(["--key", args.key])
-        if loop_start is not None and loop_end is not None:
+        if args.codec == "HCA" and loop_start is not None and loop_end is not None:
+            loop_start = None
+            loop_end = None
+            loop_source = "disabled-hca-loop-preserve-duration"
+            command.append("--no-loop")
+        elif loop_start is not None and loop_end is not None:
             command.extend(["--loop-start", str(loop_start), "--loop-end", str(loop_end)])
         else:
             command.append("--no-loop")
@@ -1623,9 +1635,9 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
             "loop_start": loop_start,
             "loop_end": loop_end,
             "normalized_hca_ciph": normalized_hca_ciph,
-            "effective_sample_count": hca_report.get("hcaSampleCount") or (loop_end if loop_end is not None else prepared_info.get("sample_count")),
+            "effective_sample_count": hca_report.get("hcaSampleCount") or prepared_info.get("sample_count"),
             "bitrate": bitrate,
-            "checks": build_replace_checks(original_entry, original_hca, input_info, prepared_info, hca_report, loop_start, loop_end),
+            "checks": build_replace_checks(original_entry, original_hca, input_info, prepared_info, hca_report, loop_start, loop_end, loop_source),
             "hca": encode_report,
         })
 
@@ -1641,7 +1653,7 @@ def cmd_patch_acb_waveform(args: argparse.Namespace) -> None:
         raise ValueError("Both --loop-start and --loop-end are required")
     if loop_start is not None and (loop_start < 0 or loop_end <= loop_start or loop_end > sample_count):
         raise ValueError(f"Invalid loop range {loop_start}..{loop_end} for {sample_count} samples")
-    effective_sample_count = loop_end if loop_start is not None and loop_end is not None else sample_count
+    effective_sample_count = sample_count
     if sample_count <= 0:
         raise ValueError("Sample count must be positive")
     if effective_sample_count <= 0:
