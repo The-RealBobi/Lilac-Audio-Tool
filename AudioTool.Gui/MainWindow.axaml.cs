@@ -325,7 +325,7 @@ public sealed partial class MainWindow : Window
 
         if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
         {
-            AppendLog("No hay un WAV cargado para reproducir. Usa un WAV de reemplazo o previsualiza una entrada AWB.");
+            AppendLog("No hay un audio cargado para reproducir. Usa un audio de reemplazo o previsualiza una entrada AWB.");
             return;
         }
 
@@ -813,7 +813,7 @@ public sealed partial class MainWindow : Window
             LoopModeComboBox.SelectedIndex = 2;
             SetLoopEnabled(false);
             UpdateLoopVisuals();
-            AppendLog("El archivo no expone metadata WAV directa. Se normalizará con FFmpeg al generar.");
+            AppendLog("El archivo no expone metadata directa de loop/duración. Se normalizará con FFmpeg al generar.");
             return;
         }
 
@@ -834,7 +834,7 @@ public sealed partial class MainWindow : Window
         LoopModeComboBox.SelectedIndex = _wavLoopStart is null ? 2 : 0;
         SetLoopEnabled(_wavLoopStart is not null);
         UpdateLoopVisuals();
-        AppendLog($"WAV: {_wavSamples} samples, {_wavSampleRate} Hz, loop: {DescribeLoop()}.");
+        AppendLog($"Audio: {_wavSamples} samples, {_wavSampleRate} Hz, loop: {DescribeLoop()}.");
     }
 
     private static ReplaceReport LoadReplaceReport(string targetAwb)
@@ -1108,8 +1108,8 @@ public sealed partial class MainWindow : Window
         LoopTimeline.HasLoop = LoopModeComboBox.SelectedIndex != 2 && _wavSamples > 0 && end > start;
         UpdatePlaybackVisuals();
         LoopSummaryTextBlock.Text = _wavSamples <= 0
-            ? "Carga un WAV para ver duración y loop."
-            : $"WAV: {_wavSamples} samples ({FormatSeconds(_wavSamples)}). Loop: {DescribeLoop()}.";
+            ? "Carga un audio para ver duración y loop."
+            : $"Audio: {_wavSamples} samples ({FormatSeconds(_wavSamples)}). Loop: {DescribeLoop()}.";
     }
 
     private void SetLoopEnabled(bool enabled)
