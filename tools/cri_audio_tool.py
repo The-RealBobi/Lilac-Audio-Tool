@@ -136,6 +136,39 @@ def normalize_hca_type1_to_plain(path: Path) -> bool:
     return True
 
 
+def match_hca_header_profile(path: Path, original_hca: dict[str, Any]) -> bool:
+    original_body = original_hca.get("Hca") or {}
+    original_version = int(original_hca.get("Version") or 0)
+    original_min_resolution = original_body.get("MinResolution")
+    if original_version <= 0 and original_min_resolution is None:
+        return False
+
+    data = bytearray(path.read_bytes())
+    if not data.startswith(HCA_MAGIC):
+        return False
+
+    changed = False
+    if original_version > 0:
+        current_version = struct.unpack_from(">H", data, 4)[0]
+        if current_version != original_version:
+            struct.pack_into(">H", data, 4, original_version)
+            changed = True
+
+    if original_min_resolution is not None:
+        header_size = struct.unpack_from(">H", data, 6)[0]
+        comp_offset = find_hca_chunk(data, b"comp", header_size)
+        if comp_offset >= 0:
+            min_resolution_offset = comp_offset + 6
+            min_resolution = int(original_min_resolution)
+            if 0 <= min_resolution <= 0xFF and data[min_resolution_offset] != min_resolution:
+                data[min_resolution_offset] = min_resolution
+                changed = True
+
+    if changed:
+        path.write_bytes(data)
+    return changed
+
+
 def crc32_filename_key(filename: str) -> int:
     return binascii.crc32(filename.encode("utf-8")) & 0xFFFFFFFF
 
@@ -1582,8 +1615,14 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
             encode_report = {"raw_stdout": encode_result.stdout}
 
         normalized_hca_ciph = False
+        matched_hca_profile = False
         encoded_hca = inspect_hca_with_helper(hca_path, helper_project) if args.codec == "HCA" else {}
         if args.codec == "HCA":
+            matched_hca_profile = match_hca_header_profile(hca_path, original_hca)
+            if matched_hca_profile:
+                encoded_hca = inspect_hca_with_helper(hca_path, helper_project)
+                if isinstance(encode_report, dict):
+                    encode_report["matchedOriginalHcaProfile"] = True
             original_encryption = int(original_hca_body.get("EncryptionType") or 0)
             encoded_encryption = int((encoded_hca.get("Hca") or {}).get("EncryptionType") or 0)
             if original_encryption == 0 and encoded_encryption == 1:
@@ -1596,6 +1635,7 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
             if isinstance(encode_report, dict):
                 encode_report["hcaVersion"] = encoded_hca.get("Version")
                 encode_report["hcaEncryptionType"] = (encoded_hca.get("Hca") or {}).get("EncryptionType")
+                encode_report["minResolution"] = (encoded_hca.get("Hca") or {}).get("MinResolution")
 
         if args.keep_hca:
             keep_path = target.with_suffix(target.suffix + ".replacement.hca")
@@ -1635,6 +1675,7 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
             "loop_start": loop_start,
             "loop_end": loop_end,
             "normalized_hca_ciph": normalized_hca_ciph,
+            "matched_hca_profile": matched_hca_profile,
             "effective_sample_count": hca_report.get("hcaSampleCount") or prepared_info.get("sample_count"),
             "bitrate": bitrate,
             "checks": build_replace_checks(original_entry, original_hca, input_info, prepared_info, hca_report, loop_start, loop_end, loop_source),
