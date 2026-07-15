@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -19,6 +21,7 @@ namespace Level5.AudioTool.Gui;
 
 public sealed partial class MainWindow : Window
 {
+    private static string AppVersion => $"v{typeof(MainWindow).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0"}";
     private readonly ObservableCollection<AwbEntryViewModel> _awbEntries = new();
     private readonly ObservableCollection<ReplacementQueueItem> _replacementQueue = new();
     private readonly string _audioRoot;
@@ -42,6 +45,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        ApplyLocalization();
         _playbackTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _playbackTimer.Tick += OnPlaybackTimerTick;
         _audioRoot = ResolveAudioRoot();
@@ -51,6 +55,9 @@ public sealed partial class MainWindow : Window
         ReplacementQueueGrid.ItemsSource = _replacementQueue;
         OutputDirectoryTextBox.Text = Path.Combine(_dataRoot, "work");
         KeepHcaCheckBox.IsCheckedChanged += OnPreferenceChanged;
+        KeepReportsCheckBox.IsCheckedChanged += OnPreferenceChanged;
+        UseModSuffixCheckBox.IsCheckedChanged += OnPreferenceChanged;
+        OverwriteOutputCheckBox.IsCheckedChanged += OnPreferenceChanged;
         PatchWaveformCheckBox.IsCheckedChanged += OnPreferenceChanged;
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
         AddHandler(DragDrop.DropEvent, OnDrop);
@@ -63,6 +70,60 @@ public sealed partial class MainWindow : Window
         AppendLog($"Preferencias: {_preferencesPath}");
         _ = RestoreSelectedAudioAsync();
         _ = EnsurePluginsAsync();
+    }
+
+    private void ApplyLocalization()
+    {
+        var strings = UiText.Current;
+        Title = $"L5 Audio Tool {AppVersion}";
+        VersionTextBlock.Text = AppVersion;
+        SubtitleTextBlock.Text = strings.Subtitle;
+        FilesHeaderTextBlock.Text = strings.Files;
+        BankLabelTextBlock.Text = strings.Bank;
+        BrowseBankButton.Content = strings.Browse;
+        ChangesHeaderTextBlock.Text = strings.Changes;
+        InspectAwbButton.Content = strings.ReadEntries;
+        PreviewEntryButton.Content = strings.PlayEntry;
+        SubstituteButton.Content = strings.Replace;
+        RemoveReplacementButton.Content = strings.Remove;
+        ClearReplacementsButton.Content = strings.Clear;
+        LoopHeaderTextBlock.Text = strings.Loop;
+        UseWavLoopButton.Content = strings.UseSmpl;
+        KeepHcaCheckBox.Content = strings.KeepHca;
+        KeepReportsCheckBox.Content = strings.KeepReports;
+        UseModSuffixCheckBox.Content = strings.UseModSuffix;
+        OverwriteOutputCheckBox.Content = strings.OverwriteOutput;
+        PatchWaveformCheckBox.Content = strings.PatchWaveform;
+        ExecuteButton.Content = strings.Export;
+        EntriesHeaderTextBlock.Text = strings.Entries;
+        OperationHeaderTextBlock.Text = strings.Operation;
+        AcbPathTextBox.Watermark = strings.AcbWatermark;
+        AwbPathTextBox.Watermark = strings.AwbWatermark;
+        ReplacementQueueGrid.Columns[0].Header = strings.Mode;
+        ReplacementQueueGrid.Columns[1].Header = strings.Entry;
+        ReplacementQueueGrid.Columns[2].Header = strings.Audio;
+        AwbEntriesGrid.Columns[0].Header = strings.Index;
+        AwbEntriesGrid.Columns[1].Header = strings.Id;
+        AwbEntriesGrid.Columns[2].Header = strings.Type;
+        AwbEntriesGrid.Columns[3].Header = strings.Size;
+        AwbEntriesGrid.Columns[4].Header = strings.Clip;
+
+        if (SelectorModeComboBox.Items[1] is ComboBoxItem indexItem)
+        {
+            indexItem.Content = strings.Index;
+        }
+        if (LoopModeComboBox.Items[0] is ComboBoxItem autoItem)
+        {
+            autoItem.Content = strings.AutoWavSmpl;
+        }
+        if (LoopModeComboBox.Items[1] is ComboBoxItem manualItem)
+        {
+            manualItem.Content = strings.Manual;
+        }
+        if (LoopModeComboBox.Items[2] is ComboBoxItem noLoopItem)
+        {
+            noLoopItem.Content = strings.NoLoop;
+        }
     }
 
     private async void OnBrowseBankClick(object? sender, RoutedEventArgs e)
@@ -295,8 +356,19 @@ public sealed partial class MainWindow : Window
         }
 
         var stem = Path.GetFileNameWithoutExtension(awbPath);
-        var targetAwb = Path.Combine(outputDirectory, $"{stem}.mod.awb");
-        var targetAcb = Path.Combine(outputDirectory, $"{Path.GetFileNameWithoutExtension(acbPath)}.mod.acb");
+        var targetAwb = BuildExportPath(outputDirectory, awbPath, ".awb");
+        var targetAcb = BuildExportPath(outputDirectory, acbPath, ".acb");
+        if (IsSamePath(targetAcb, acbPath) || IsSamePath(targetAwb, awbPath))
+        {
+            AppendLog(UiText.Current.OutputMatchesSource);
+            return;
+        }
+
+        if (!PrepareOverwrite(targetAcb, targetAwb))
+        {
+            return;
+        }
+
         if (PatchWaveformCheckBox.IsChecked == true && jobs.Any(job => !TryResolvePatchAwbId(job, out _)))
         {
             return;
@@ -320,7 +392,9 @@ public sealed partial class MainWindow : Window
                     intermediateFiles.Add(nextAwb);
                     intermediateFiles.Add(nextAcb);
                     intermediateFiles.Add($"{nextAwb}.wav-replace-report.json");
+                    intermediateFiles.Add($"{nextAwb}.replace-report.json");
                     intermediateFiles.Add($"{nextAcb}.patch-report.json");
+                    intermediateFiles.Add($"{nextAcb}.stream-awb-report.json");
                 }
 
                 var replaceArgs = new List<string>
@@ -432,6 +506,10 @@ public sealed partial class MainWindow : Window
             if (streamPatchResult.ExitCode == 0)
             {
                 DeleteIntermediateFiles(intermediateFiles);
+                if (KeepReportsCheckBox.IsChecked != true)
+                {
+                    DeleteExportReports(targetAcb, targetAwb);
+                }
                 AppendLog($"Listo: {targetAcb}");
                 AppendLog($"Listo: {targetAwb}");
             }
@@ -535,6 +613,28 @@ public sealed partial class MainWindow : Window
     {
         _replacementQueue.Clear();
         UpdateCommandPreview();
+    }
+
+    private async void OnReplacementSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!_uiReady || ReplacementQueueGrid.SelectedItem is not ReplacementQueueItem item)
+        {
+            return;
+        }
+
+        if (!File.Exists(item.AudioPath))
+        {
+            AppendLog(UiText.Current.AudioMissing(item.AudioPath));
+            return;
+        }
+
+        WavPathTextBox.Text = item.AudioPath;
+        await LoadWavInfoAsync(item.AudioPath);
+        if (_wavSamples > 0)
+        {
+            SetPlayerSource(item.AudioPath);
+        }
+        SavePreferences();
     }
 
     private void OnDragOver(object? sender, DragEventArgs e)
@@ -845,6 +945,39 @@ public sealed partial class MainWindow : Window
         };
     }
 
+    private string BuildExportPath(string outputDirectory, string sourcePath, string extension)
+    {
+        var suffix = UseModSuffixCheckBox.IsChecked == true ? ".mod" : "";
+        return Path.Combine(outputDirectory, $"{Path.GetFileNameWithoutExtension(sourcePath)}{suffix}{extension}");
+    }
+
+    private bool PrepareOverwrite(params string[] paths)
+    {
+        var existing = paths.Where(File.Exists).ToList();
+        if (existing.Count == 0)
+        {
+            return true;
+        }
+
+        if (OverwriteOutputCheckBox.IsChecked == true)
+        {
+            foreach (var path in existing)
+            {
+                File.Delete(path);
+                DeleteExportReportsFor(path);
+            }
+            return true;
+        }
+
+        AppendLog(UiText.Current.OutputExists(string.Join(", ", existing.Select(Path.GetFileName))));
+        return false;
+    }
+
+    private static bool IsSamePath(string first, string second)
+    {
+        return string.Equals(Path.GetFullPath(first), Path.GetFullPath(second), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    }
+
     private static void DeleteIntermediateFiles(IEnumerable<string> paths)
     {
         foreach (var path in paths)
@@ -853,6 +986,20 @@ public sealed partial class MainWindow : Window
             {
                 File.Delete(path);
             }
+        }
+    }
+
+    private static void DeleteExportReports(string targetAcb, string targetAwb)
+    {
+        DeleteExportReportsFor(targetAcb);
+        DeleteExportReportsFor(targetAwb);
+    }
+
+    private static void DeleteExportReportsFor(string target)
+    {
+        foreach (var path in Directory.EnumerateFiles(Path.GetDirectoryName(target) ?? ".", $"{Path.GetFileName(target)}.*report.json"))
+        {
+            File.Delete(path);
         }
     }
 
@@ -1315,6 +1462,9 @@ public sealed partial class MainWindow : Window
             LoopStartBox.Value = Math.Max(0, preferences.LoopStart);
             LoopEndBox.Value = Math.Max(0, preferences.LoopEnd);
             KeepHcaCheckBox.IsChecked = preferences.KeepHca;
+            KeepReportsCheckBox.IsChecked = preferences.KeepReports;
+            UseModSuffixCheckBox.IsChecked = preferences.UseModSuffix;
+            OverwriteOutputCheckBox.IsChecked = preferences.OverwriteOutput;
             PatchWaveformCheckBox.IsChecked = preferences.PatchWaveform;
         }
         catch (Exception ex)
@@ -1348,6 +1498,9 @@ public sealed partial class MainWindow : Window
                 LoopStart = (int)(LoopStartBox.Value ?? 0),
                 LoopEnd = (int)(LoopEndBox.Value ?? 0),
                 KeepHca = KeepHcaCheckBox.IsChecked == true,
+                KeepReports = KeepReportsCheckBox.IsChecked == true,
+                UseModSuffix = UseModSuffixCheckBox.IsChecked == true,
+                OverwriteOutput = OverwriteOutputCheckBox.IsChecked == true,
                 PatchWaveform = PatchWaveformCheckBox.IsChecked == true
             };
 
@@ -1566,13 +1719,140 @@ public sealed partial class MainWindow : Window
 
     private sealed record ReplacementJob(string SelectorMode, int Entry, string AudioPath)
     {
-        public string Label => $"{(SelectorMode == "--id" ? "ID" : "índice")} {Entry} <- {Path.GetFileName(AudioPath)}";
+        public string Label => $"{(SelectorMode == "--id" ? "ID" : UiText.Current.Index)} {Entry} <- {Path.GetFileName(AudioPath) ?? AudioPath}";
     }
 
     private sealed record ReplacementQueueItem(string SelectorMode, int Entry, string AudioPath)
     {
-        public string Mode => SelectorMode == "--id" ? "ID" : "Índice";
-        public string AudioName => Path.GetFileName(AudioPath);
+        public string Mode => SelectorMode == "--id" ? "ID" : UiText.Current.Index;
+        public string AudioName => Path.GetFileName(AudioPath) ?? AudioPath;
+    }
+
+    private sealed class UiText
+    {
+        public static UiText Current => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase)
+            ? Spanish
+            : English;
+
+        private static UiText Spanish { get; } = new()
+        {
+            Subtitle = "Reemplazo de audio ACB/AWB mediante backend Python",
+            Files = "Archivos",
+            Bank = "ACB/AWB",
+            Browse = "Examinar",
+            Changes = "Cambios",
+            ReadEntries = "Leer entradas AWB",
+            PlayEntry = "Reproducir entrada",
+            Replace = "Sustituir",
+            Remove = "Quitar",
+            Clear = "Limpiar",
+            Loop = "Loop",
+            UseSmpl = "Usar smpl",
+            KeepHca = "Conservar HCA generado junto al AWB",
+            KeepReports = "Conservar reports/logs de exportación",
+            UseModSuffix = "Añadir sufijo .mod",
+            OverwriteOutput = "Sobreescribir salida existente",
+            PatchWaveform = "Actualizar duración y formato en WaveformTable",
+            Export = "Export",
+            Entries = "Entradas AWB",
+            Operation = "Operación",
+            AcbWatermark = "Banco .acb",
+            AwbWatermark = "Banco .awb",
+            Mode = "Modo",
+            Entry = "Entrada",
+            Audio = "Audio",
+            Index = "Índice",
+            Id = "ID",
+            Type = "Tipo",
+            Size = "Tamaño",
+            Clip = "Clip",
+            AutoWavSmpl = "Auto WAV smpl",
+            Manual = "Manual",
+            NoLoop = "Sin loop",
+            AudioMissingPrefix = "No existe el archivo en cola",
+            OutputExistsPrefix = "La salida ya existe. Activa sobreescritura para reemplazar",
+            OutputMatchesSource = "La salida coincide con el banco original. Elige otra carpeta o activa el sufijo .mod para no sobrescribir la fuente."
+        };
+
+        private static UiText English { get; } = new()
+        {
+            Subtitle = "ACB/AWB audio replacement through the Python backend",
+            Files = "Files",
+            Bank = "ACB/AWB",
+            Browse = "Browse",
+            Changes = "Changes",
+            ReadEntries = "Read AWB entries",
+            PlayEntry = "Play entry",
+            Replace = "Replace",
+            Remove = "Remove",
+            Clear = "Clear",
+            Loop = "Loop",
+            UseSmpl = "Use smpl",
+            KeepHca = "Keep generated HCA next to the AWB",
+            KeepReports = "Keep export reports/logs",
+            UseModSuffix = "Append .mod suffix",
+            OverwriteOutput = "Overwrite existing output",
+            PatchWaveform = "Update duration and format in WaveformTable",
+            Export = "Export",
+            Entries = "AWB Entries",
+            Operation = "Operation",
+            AcbWatermark = ".acb bank",
+            AwbWatermark = ".awb bank",
+            Mode = "Mode",
+            Entry = "Entry",
+            Audio = "Audio",
+            Index = "Index",
+            Id = "ID",
+            Type = "Type",
+            Size = "Size",
+            Clip = "Clip",
+            AutoWavSmpl = "Auto WAV smpl",
+            Manual = "Manual",
+            NoLoop = "No loop",
+            AudioMissingPrefix = "Queued file does not exist",
+            OutputExistsPrefix = "Output already exists. Enable overwrite to replace",
+            OutputMatchesSource = "The output path matches the original bank. Choose another folder or keep the .mod suffix to avoid overwriting the source."
+        };
+
+        public string Subtitle { get; init; } = "";
+        public string Files { get; init; } = "";
+        public string Bank { get; init; } = "";
+        public string Browse { get; init; } = "";
+        public string Changes { get; init; } = "";
+        public string ReadEntries { get; init; } = "";
+        public string PlayEntry { get; init; } = "";
+        public string Replace { get; init; } = "";
+        public string Remove { get; init; } = "";
+        public string Clear { get; init; } = "";
+        public string Loop { get; init; } = "";
+        public string UseSmpl { get; init; } = "";
+        public string KeepHca { get; init; } = "";
+        public string KeepReports { get; init; } = "";
+        public string UseModSuffix { get; init; } = "";
+        public string OverwriteOutput { get; init; } = "";
+        public string PatchWaveform { get; init; } = "";
+        public string Export { get; init; } = "";
+        public string Entries { get; init; } = "";
+        public string Operation { get; init; } = "";
+        public string AcbWatermark { get; init; } = "";
+        public string AwbWatermark { get; init; } = "";
+        public string Mode { get; init; } = "";
+        public string Entry { get; init; } = "";
+        public string Audio { get; init; } = "";
+        public string Index { get; init; } = "";
+        public string Id { get; init; } = "";
+        public string Type { get; init; } = "";
+        public string Size { get; init; } = "";
+        public string Clip { get; init; } = "";
+        public string AutoWavSmpl { get; init; } = "";
+        public string Manual { get; init; } = "";
+        public string NoLoop { get; init; } = "";
+        public string AudioMissingPrefix { get; init; } = "";
+        public string OutputExistsPrefix { get; init; } = "";
+        public string OutputMatchesSource { get; init; } = "";
+
+        public string AudioMissing(string path) => $"{AudioMissingPrefix}: {path}";
+        public string OutputExists(string names) => $"{OutputExistsPrefix}: {names}";
     }
 
     private sealed class UserPreferences
@@ -1587,6 +1867,9 @@ public sealed partial class MainWindow : Window
         public int LoopStart { get; set; }
         public int LoopEnd { get; set; }
         public bool KeepHca { get; set; } = true;
+        public bool KeepReports { get; set; }
+        public bool UseModSuffix { get; set; } = true;
+        public bool OverwriteOutput { get; set; }
         public bool PatchWaveform { get; set; }
     }
 

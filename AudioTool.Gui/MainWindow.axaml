@@ -10,20 +10,23 @@
         DragDrop.AllowDrop="True">
   <Grid Margin="20" RowDefinitions="Auto,*">
     <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,18">
-      <TextBlock Text="L5 Audio Tool" FontSize="30" FontWeight="Bold" />
-      <TextBlock Text="Reemplazo de audio ACB/AWB mediante backend Python" Opacity="0.72" />
+      <StackPanel Orientation="Horizontal" Spacing="10">
+        <TextBlock Text="L5 Audio Tool" FontSize="30" FontWeight="Bold" />
+        <TextBlock x:Name="VersionTextBlock" VerticalAlignment="Center" Opacity="0.68" />
+      </StackPanel>
+      <TextBlock x:Name="SubtitleTextBlock" Text="Reemplazo de audio ACB/AWB mediante backend Python" Opacity="0.72" />
     </StackPanel>
 
     <Grid Grid.Row="1" ColumnDefinitions="420,12,*">
       <Border Grid.Column="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
         <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="12">
-          <TextBlock Text="Archivos" FontWeight="SemiBold" />
+          <TextBlock x:Name="FilesHeaderTextBlock" Text="Archivos" FontWeight="SemiBold" />
 
           <StackPanel Grid.Row="1" Spacing="8">
-            <TextBlock Text="ACB/AWB" Opacity="0.8" />
+            <TextBlock x:Name="BankLabelTextBlock" Text="ACB/AWB" Opacity="0.8" />
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
               <TextBox x:Name="AcbPathTextBox" Watermark="Banco .acb" IsReadOnly="True" />
-              <Button Grid.Column="1" Content="Examinar" Click="OnBrowseBankClick" />
+              <Button x:Name="BrowseBankButton" Grid.Column="1" Content="Examinar" Click="OnBrowseBankClick" />
             </Grid>
             <TextBox x:Name="AwbPathTextBox" Watermark="Banco .awb" IsReadOnly="True" />
             <TextBox x:Name="WavPathTextBox" IsVisible="False" IsReadOnly="True" />
@@ -33,7 +36,7 @@
           <StackPanel Grid.Row="2" Spacing="12">
             <Border Padding="12" CornerRadius="8" Background="#16232424">
               <Grid RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="10">
-                <TextBlock Text="Cambios" FontWeight="SemiBold" />
+                <TextBlock x:Name="ChangesHeaderTextBlock" Text="Cambios" FontWeight="SemiBold" />
                 <Grid Grid.Row="1" ColumnDefinitions="120,*" ColumnSpacing="10">
                   <ComboBox x:Name="SelectorModeComboBox" SelectedIndex="0" SelectionChanged="OnSelectorChanged">
                     <ComboBoxItem Content="ID AWB" />
@@ -57,15 +60,16 @@
                 </StackPanel>
                 <StackPanel Grid.Row="3" Spacing="8">
                   <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button Content="Sustituir" Click="OnSubstituteClick" />
-                    <Button Content="Quitar" Click="OnRemoveReplacementClick" />
-                    <Button Content="Limpiar" Click="OnClearReplacementsClick" />
+                    <Button x:Name="SubstituteButton" Content="Sustituir" Click="OnSubstituteClick" />
+                    <Button x:Name="RemoveReplacementButton" Content="Quitar" Click="OnRemoveReplacementClick" />
+                    <Button x:Name="ClearReplacementsButton" Content="Limpiar" Click="OnClearReplacementsClick" />
                   </StackPanel>
                   <DataGrid x:Name="ReplacementQueueGrid"
                             Height="132"
                             AutoGenerateColumns="False"
                             IsReadOnly="True"
-                            GridLinesVisibility="Horizontal">
+                            GridLinesVisibility="Horizontal"
+                            SelectionChanged="OnReplacementSelectionChanged">
                     <DataGrid.Columns>
                       <DataGridTextColumn Header="Modo" Binding="{Binding Mode}" Width="70" />
                       <DataGridTextColumn Header="Entrada" Binding="{Binding Entry}" Width="80" />
@@ -85,15 +89,15 @@
             </Border>
 
             <Border Grid.Row="3" Padding="12" CornerRadius="8" Background="#16232424">
-              <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="10">
-                <TextBlock Text="Loop" FontWeight="SemiBold" />
+              <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="10">
+                <TextBlock x:Name="LoopHeaderTextBlock" Text="Loop" FontWeight="SemiBold" />
                 <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
                   <ComboBox x:Name="LoopModeComboBox" SelectedIndex="0" SelectionChanged="OnLoopModeChanged">
                     <ComboBoxItem Content="Auto WAV smpl" />
                     <ComboBoxItem Content="Manual" />
                     <ComboBoxItem Content="Sin loop" />
                   </ComboBox>
-                  <Button Grid.Column="1" Content="Usar smpl" Click="OnUseWavLoopClick" />
+                  <Button x:Name="UseWavLoopButton" Grid.Column="1" Content="Usar smpl" Click="OnUseWavLoopClick" />
                 </Grid>
 
                 <Grid Grid.Row="2" RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
@@ -130,7 +134,10 @@
                 </Grid>
 
                 <CheckBox Grid.Row="3" x:Name="KeepHcaCheckBox" Content="Conservar HCA generado junto al AWB" IsChecked="True" />
-                <CheckBox Grid.Row="4" x:Name="PatchWaveformCheckBox" Content="Actualizar duración y formato en WaveformTable" IsChecked="False" />
+                <CheckBox Grid.Row="4" x:Name="KeepReportsCheckBox" Content="Conservar reports/logs de exportación" IsChecked="False" />
+                <CheckBox Grid.Row="5" x:Name="UseModSuffixCheckBox" Content="Añadir sufijo .mod" IsChecked="True" />
+                <CheckBox Grid.Row="6" x:Name="OverwriteOutputCheckBox" Content="Sobreescribir salida existente" IsChecked="False" />
+                <CheckBox Grid.Row="7" x:Name="PatchWaveformCheckBox" Content="Actualizar duración y formato en WaveformTable" IsChecked="False" />
               </Grid>
             </Border>
 
@@ -155,7 +162,7 @@
       <Grid Grid.Column="2" RowDefinitions="260,12,*">
         <Border Grid.Row="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
           <Grid RowDefinitions="Auto,*" RowSpacing="10">
-            <TextBlock Text="Entradas AWB" FontWeight="SemiBold" />
+            <TextBlock x:Name="EntriesHeaderTextBlock" Text="Entradas AWB" FontWeight="SemiBold" />
             <DataGrid Grid.Row="1"
                       x:Name="AwbEntriesGrid"
                       AutoGenerateColumns="False"
@@ -192,7 +199,7 @@
 
         <Border Grid.Row="2" Padding="14" CornerRadius="10" Background="#101C1C1C">
           <Grid RowDefinitions="Auto,Auto,*" RowSpacing="10">
-            <TextBlock Text="Operación" FontWeight="SemiBold" />
+            <TextBlock x:Name="OperationHeaderTextBlock" Text="Operación" FontWeight="SemiBold" />
             <TextBlock Grid.Row="1" x:Name="CommandPreviewTextBlock" Text="Sin comando preparado." Opacity="0.75" TextWrapping="Wrap" />
             <TextBox Grid.Row="2"
                      x:Name="LogTextBox"
