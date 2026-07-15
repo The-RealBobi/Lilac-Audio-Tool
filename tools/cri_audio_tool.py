@@ -645,6 +645,41 @@ def wav_info(path: Path) -> dict[str, Any]:
     }
 
 
+def audio_info(path: Path) -> dict[str, Any]:
+    try:
+        return wav_info(path)
+    except (wave.Error, EOFError):
+        pass
+
+    ffmpeg_path, ffmpeg_source = resolve_ffmpeg(download=True)
+    work_dir = data_root() / "work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="cri_audio_info_", dir=str(work_dir)) as temp_dir:
+        prepared_wav = Path(temp_dir) / f"{path.stem}.analysis.wav"
+        command = [
+            ffmpeg_path,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(path),
+            "-vn",
+            "-acodec",
+            "pcm_s16le",
+            str(prepared_wav),
+        ]
+        subprocess.run(command, check=True)
+        info = wav_info(prepared_wav)
+
+    info["path"] = str(path)
+    info["source_format"] = path.suffix.lower().lstrip(".") or "unknown"
+    info["normalized_for_analysis"] = True
+    info["ffmpeg"] = {"path": ffmpeg_path, "source": ffmpeg_source}
+    info["loop"] = None
+    return info
+
+
 def wav_peaks(path: Path, buckets: int = 512) -> list[float]:
     with wave.open(str(path), "rb") as wav:
         frame_count = wav.getnframes()
@@ -1248,7 +1283,7 @@ def cmd_inspect(args: argparse.Namespace) -> None:
 
 def cmd_wav_info(args: argparse.Namespace) -> None:
     source = Path(args.source)
-    print(json.dumps(wav_info(source), ensure_ascii=False, indent=2))
+    print(json.dumps(audio_info(source), ensure_ascii=False, indent=2))
 
 
 def cmd_ensure_plugins(args: argparse.Namespace) -> None:
