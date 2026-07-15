@@ -20,6 +20,7 @@ namespace Level5.AudioTool.Gui;
 public sealed partial class MainWindow : Window
 {
     private readonly ObservableCollection<AwbEntryViewModel> _awbEntries = new();
+    private readonly ObservableCollection<ReplacementQueueItem> _replacementQueue = new();
     private readonly string _audioRoot;
     private readonly string _dataRoot;
     private readonly string _preferencesPath;
@@ -47,9 +48,12 @@ public sealed partial class MainWindow : Window
         _dataRoot = ResolveDataRoot();
         _preferencesPath = Path.Combine(_dataRoot, "config", "user_preferences.json");
         AwbEntriesGrid.ItemsSource = _awbEntries;
+        ReplacementQueueGrid.ItemsSource = _replacementQueue;
         OutputDirectoryTextBox.Text = Path.Combine(_dataRoot, "work");
         KeepHcaCheckBox.IsCheckedChanged += OnPreferenceChanged;
         PatchWaveformCheckBox.IsCheckedChanged += OnPreferenceChanged;
+        AddHandler(DragDrop.DragOverEvent, OnDragOver);
+        AddHandler(DragDrop.DropEvent, OnDrop);
         LoadPreferences();
         SetLoopEnabled(false);
         _uiReady = true;
@@ -61,12 +65,22 @@ public sealed partial class MainWindow : Window
         _ = EnsurePluginsAsync();
     }
 
+    private async void OnBrowseBankClick(object? sender, RoutedEventArgs e)
+    {
+        var path = await PickFileAsync("Seleccionar ACB/AWB", [new FilePickerFileType("CRI ACB/AWB") { Patterns = ["*.acb", "*.awb"] }]);
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            await LoadBankPairAsync(path);
+        }
+    }
+
     private async void OnBrowseAcbClick(object? sender, RoutedEventArgs e)
     {
         var path = await PickFileAsync("Seleccionar ACB", [new FilePickerFileType("CRI ACB") { Patterns = ["*.acb"] }]);
         if (!string.IsNullOrWhiteSpace(path))
         {
             AcbPathTextBox.Text = path;
+            await TryLoadSiblingBankAsync(path);
             SavePreferences();
             UpdateCommandPreview();
         }
@@ -108,6 +122,7 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(path))
         {
             AwbPathTextBox.Text = path;
+            await TryLoadSiblingBankAsync(path);
             SavePreferences();
             UpdateCommandPreview();
         }
@@ -149,6 +164,11 @@ public sealed partial class MainWindow : Window
 
     private async void OnInspectAwbClick(object? sender, RoutedEventArgs e)
     {
+        await InspectAwbAsync();
+    }
+
+    private async Task InspectAwbAsync()
+    {
         if (string.IsNullOrWhiteSpace(AwbPathTextBox.Text))
         {
             AppendLog("Selecciona un AWB antes de inspeccionar.");
@@ -157,7 +177,14 @@ public sealed partial class MainWindow : Window
 
         await RunBusyAsync(async () =>
         {
-            var result = await RunPythonAsync(["inspect", AwbPathTextBox.Text!]);
+            var inspectArgs = new List<string> { "inspect", AwbPathTextBox.Text! };
+            if (!string.IsNullOrWhiteSpace(AcbPathTextBox.Text) && File.Exists(AcbPathTextBox.Text))
+            {
+                inspectArgs.Add("--acb");
+                inspectArgs.Add(AcbPathTextBox.Text!);
+            }
+
+            var result = await RunPythonAsync(inspectArgs);
             if (result.ExitCode != 0)
             {
                 AppendLog(result.CombinedOutput);
@@ -168,7 +195,7 @@ public sealed partial class MainWindow : Window
             _awbEntries.Clear();
             foreach (var entry in metadata?.Entries ?? [])
             {
-                _awbEntries.Add(new AwbEntryViewModel(entry.Index, entry.Id, entry.Extension ?? "", entry.Size, entry.Sha1 ?? ""));
+                _awbEntries.Add(new AwbEntryViewModel(entry.Index, entry.Id, entry.Extension ?? "", entry.Size, entry.Name ?? ""));
             }
 
             AppendLog($"AWB inspeccionado: {_awbEntries.Count} entradas.");
@@ -212,9 +239,7 @@ public sealed partial class MainWindow : Window
 
             var decoder = string.IsNullOrWhiteSpace(preview.Decoder) ? "desconocido" : preview.Decoder;
             AppendLog($"Previsualización ({decoder}): {preview.Wav}");
-            await LoadWavInfoAsync(preview.Wav);
-            SetPlayerSource(preview.Wav);
-            StartPlayback();
+            OpenWithSystemPlayer(preview.Wav);
         });
     }
 
@@ -248,18 +273,31 @@ public sealed partial class MainWindow : Window
 
     private async void OnExecuteClick(object? sender, RoutedEventArgs e)
     {
-        if (!ValidateInputs(out var acbPath, out var awbPath, out var wavPath, out var outputDirectory))
+        var outputDirectory = await PickOutputDirectoryAsync();
+        if (string.IsNullOrWhiteSpace(outputDirectory))
         {
+            return;
+        }
+
+        OutputDirectoryTextBox.Text = outputDirectory;
+        SavePreferences();
+
+        if (!ValidateInputs(out var acbPath, out var awbPath, out var wavPath, out _))
+        {
+            return;
+        }
+
+        var jobs = BuildReplacementJobs(wavPath);
+        if (jobs.Count == 0)
+        {
+            AppendLog("Añade al menos un audio de reemplazo.");
             return;
         }
 
         var stem = Path.GetFileNameWithoutExtension(awbPath);
         var targetAwb = Path.Combine(outputDirectory, $"{stem}.mod.awb");
         var targetAcb = Path.Combine(outputDirectory, $"{Path.GetFileNameWithoutExtension(acbPath)}.mod.acb");
-        var selectorMode = SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index";
-        var selectorValue = ((int)(EntryNumberBox.Value ?? 0)).ToString();
-        var patchAwbId = 0;
-        if (PatchWaveformCheckBox.IsChecked == true && !TryResolvePatchAwbId(out patchAwbId))
+        if (PatchWaveformCheckBox.IsChecked == true && jobs.Any(job => !TryResolvePatchAwbId(job, out _)))
         {
             return;
         }
@@ -267,79 +305,111 @@ public sealed partial class MainWindow : Window
         await RunBusyAsync(async () =>
         {
             Directory.CreateDirectory(outputDirectory);
+            var currentAwb = awbPath;
+            var currentAcb = acbPath;
+            var intermediateFiles = new List<string>();
 
-            var replaceArgs = new List<string>
+            for (var i = 0; i < jobs.Count; i++)
             {
-                "replace-awb-wav",
-                awbPath,
-                targetAwb,
-                wavPath,
-                selectorMode,
-                selectorValue
-            };
-
-            AddLoopArgs(replaceArgs);
-            if (KeepHcaCheckBox.IsChecked == true)
-            {
-                replaceArgs.Add("--keep-hca");
-            }
-
-            AppendLog("Generando AWB modificado...");
-            var replaceResult = await RunPythonAsync(replaceArgs);
-            AppendLog(replaceResult.CombinedOutput);
-            if (replaceResult.ExitCode != 0)
-            {
-                return;
-            }
-
-            var replaceReport = LoadReplaceReport(targetAwb);
-            LogReplaceWarnings(replaceReport);
-
-            if (PatchWaveformCheckBox.IsChecked == true)
-            {
-                var patchArgs = new List<string>
+                var job = jobs[i];
+                var isLast = i == jobs.Count - 1;
+                var nextAwb = isLast ? targetAwb : Path.Combine(outputDirectory, $"{stem}.batch-{i + 1}.awb");
+                var nextAcb = isLast ? targetAcb : Path.Combine(outputDirectory, $"{Path.GetFileNameWithoutExtension(acbPath)}.batch-{i + 1}.acb");
+                if (!isLast)
                 {
-                    "patch-acb-waveform",
-                    acbPath,
-                    targetAcb,
-                    "--id",
-                    patchAwbId.ToString(),
-                    "--samples",
-                    replaceReport.EffectiveSampleCount.ToString(),
-                    "--encode-type",
-                    "2"
+                    intermediateFiles.Add(nextAwb);
+                    intermediateFiles.Add(nextAcb);
+                    intermediateFiles.Add($"{nextAwb}.wav-replace-report.json");
+                    intermediateFiles.Add($"{nextAcb}.patch-report.json");
+                }
+
+                var replaceArgs = new List<string>
+                {
+                    "replace-awb-wav",
+                    currentAwb,
+                    nextAwb,
+                    job.AudioPath,
+                    job.SelectorMode,
+                    job.Entry.ToString()
                 };
-                if (replaceReport.PreparedWavInfo?.Channels is > 0)
+
+                AddLoopArgs(replaceArgs);
+                if (KeepHcaCheckBox.IsChecked == true)
                 {
-                    patchArgs.Add("--channels");
-                    patchArgs.Add(replaceReport.PreparedWavInfo.Channels.Value.ToString());
-                }
-                if (replaceReport.PreparedWavInfo?.SampleRate is > 0)
-                {
-                    patchArgs.Add("--sampling-rate");
-                    patchArgs.Add(replaceReport.PreparedWavInfo.SampleRate.Value.ToString());
+                    replaceArgs.Add("--keep-hca");
                 }
 
-                if (replaceReport.LoopStart is not null && replaceReport.LoopEnd is not null)
-                {
-                    patchArgs.Add("--loop-start");
-                    patchArgs.Add(replaceReport.LoopStart.Value.ToString());
-                    patchArgs.Add("--loop-end");
-                    patchArgs.Add(replaceReport.LoopEnd.Value.ToString());
-                }
-                else
-                {
-                    patchArgs.Add("--no-loop");
-                }
-                AppendLog("Parcheando WaveformTable del ACB...");
-                var patchResult = await RunPythonAsync(patchArgs);
-                AppendLog(patchResult.CombinedOutput);
-                if (patchResult.ExitCode != 0)
+                AppendLog($"Generando AWB modificado ({i + 1}/{jobs.Count}): {job.Label}");
+                var replaceResult = await RunPythonAsync(replaceArgs);
+                AppendLog(replaceResult.CombinedOutput);
+                if (replaceResult.ExitCode != 0)
                 {
                     return;
                 }
+
+                var replaceReport = LoadReplaceReport(nextAwb);
+                LogReplaceWarnings(replaceReport);
+                if (HasReplaceErrors(replaceReport))
+                {
+                    return;
+                }
+
+                if (PatchWaveformCheckBox.IsChecked == true)
+                {
+                    if (!TryResolvePatchAwbId(job, out var patchAwbId))
+                    {
+                        return;
+                    }
+
+                    var patchArgs = new List<string>
+                    {
+                        "patch-acb-waveform",
+                        currentAcb,
+                        nextAcb,
+                        "--id",
+                        patchAwbId.ToString(),
+                        "--samples",
+                        replaceReport.EffectiveSampleCount.ToString(),
+                        "--encode-type",
+                        "2"
+                    };
+                    if (replaceReport.PreparedWavInfo?.Channels is > 0)
+                    {
+                        patchArgs.Add("--channels");
+                        patchArgs.Add(replaceReport.PreparedWavInfo.Channels.Value.ToString());
+                    }
+                    if (replaceReport.PreparedWavInfo?.SampleRate is > 0)
+                    {
+                        patchArgs.Add("--sampling-rate");
+                        patchArgs.Add(replaceReport.PreparedWavInfo.SampleRate.Value.ToString());
+                    }
+
+                    if (replaceReport.LoopStart is not null && replaceReport.LoopEnd is not null)
+                    {
+                        patchArgs.Add("--loop-start");
+                        patchArgs.Add(replaceReport.LoopStart.Value.ToString());
+                        patchArgs.Add("--loop-end");
+                        patchArgs.Add(replaceReport.LoopEnd.Value.ToString());
+                    }
+                    else
+                    {
+                        patchArgs.Add("--no-loop");
+                    }
+                    AppendLog($"Parcheando WaveformTable del ACB ({i + 1}/{jobs.Count})...");
+                    var patchResult = await RunPythonAsync(patchArgs);
+                    AppendLog(patchResult.CombinedOutput);
+                    if (patchResult.ExitCode != 0)
+                    {
+                        return;
+                    }
+
+                    currentAcb = nextAcb;
+                }
+
+                currentAwb = nextAwb;
             }
-            else
+
+            if (PatchWaveformCheckBox.IsChecked != true)
             {
                 File.Copy(acbPath, targetAcb, overwrite: true);
                 AppendLog("ACB conservado; sólo se actualizará su vínculo con el AWB.");
@@ -361,6 +431,7 @@ public sealed partial class MainWindow : Window
             AppendLog(streamPatchResult.CombinedOutput);
             if (streamPatchResult.ExitCode == 0)
             {
+                DeleteIntermediateFiles(intermediateFiles);
                 AppendLog($"Listo: {targetAcb}");
                 AppendLog($"Listo: {targetAwb}");
             }
@@ -405,6 +476,124 @@ public sealed partial class MainWindow : Window
 
         SavePreferences();
         UpdateCommandPreview();
+    }
+
+    private void OnAwbEntrySelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!_uiReady || AwbEntriesGrid.SelectedItem is not AwbEntryViewModel entry)
+        {
+            return;
+        }
+
+        SelectorModeComboBox.SelectedIndex = 0;
+        EntryNumberBox.Value = entry.Id;
+        SavePreferences();
+        UpdateCommandPreview();
+    }
+
+    private async void OnSubstituteClick(object? sender, RoutedEventArgs e)
+    {
+        var path = await PickFileAsync("Seleccionar audio de reemplazo", [new FilePickerFileType("Audio") { Patterns = ["*.wav", "*.flac", "*.ogg", "*.mp3", "*.m4a", "*.aac", "*.aiff", "*.aif"] }]);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        WavPathTextBox.Text = path;
+        await LoadWavInfoAsync(path);
+        if (_wavSamples > 0)
+        {
+            SetPlayerSource(path);
+        }
+
+        AddReplacementToQueue(path, (int)(EntryNumberBox.Value ?? 0));
+        SavePreferences();
+    }
+
+    private void OnAddReplacementClick(object? sender, RoutedEventArgs e)
+    {
+        var audioPath = WavPathTextBox.Text?.Trim() ?? "";
+        if (!File.Exists(audioPath))
+        {
+            AppendLog("Selecciona un audio de reemplazo antes de añadirlo a la cola.");
+            return;
+        }
+
+        AddReplacementToQueue(audioPath, (int)(EntryNumberBox.Value ?? 0));
+    }
+
+    private void OnRemoveReplacementClick(object? sender, RoutedEventArgs e)
+    {
+        if (ReplacementQueueGrid.SelectedItem is ReplacementQueueItem item)
+        {
+            _replacementQueue.Remove(item);
+            UpdateCommandPreview();
+        }
+    }
+
+    private void OnClearReplacementsClick(object? sender, RoutedEventArgs e)
+    {
+        _replacementQueue.Clear();
+        UpdateCommandPreview();
+    }
+
+    private void OnDragOver(object? sender, DragEventArgs e)
+    {
+        e.DragEffects = e.Data.Contains(DataFormats.Files) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private async void OnDrop(object? sender, DragEventArgs e)
+    {
+        var files = e.Data.GetFiles()?
+            .Select(item => item.TryGetLocalPath())
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Cast<string>()
+            .ToList() ?? [];
+        if (files.Count == 0)
+        {
+            return;
+        }
+
+        var audioOffset = 0;
+        foreach (var path in files)
+        {
+            var extension = Path.GetExtension(path).ToLowerInvariant();
+            if (extension == ".acb")
+            {
+                await LoadBankPairAsync(path);
+                continue;
+            }
+
+            if (extension == ".awb")
+            {
+                await LoadBankPairAsync(path);
+                continue;
+            }
+
+            if (!IsSupportedAudio(path))
+            {
+                continue;
+            }
+
+            WavPathTextBox.Text = path;
+            AddReplacementToQueue(path, GuessEntryFromFileName(path) ?? (int)(EntryNumberBox.Value ?? 0) + audioOffset);
+            audioOffset++;
+        }
+
+        var selectedAudio = WavPathTextBox.Text?.Trim();
+        if (!string.IsNullOrWhiteSpace(selectedAudio) && File.Exists(selectedAudio))
+        {
+            await LoadWavInfoAsync(selectedAudio);
+            if (_wavSamples > 0)
+            {
+                SetPlayerSource(selectedAudio);
+            }
+        }
+
+        SavePreferences();
+        UpdateCommandPreview();
+        e.Handled = true;
     }
 
     private void OnUseWavLoopClick(object? sender, RoutedEventArgs e)
@@ -565,13 +754,20 @@ public sealed partial class MainWindow : Window
     {
         foreach (var check in report.Checks ?? [])
         {
-            if (!string.Equals(check.Status, "warning", StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(check.Status, "warning", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(check.Status, "error", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            AppendLog($"Aviso: {check.Name} - {check.Describe()}");
+            var prefix = string.Equals(check.Status, "error", StringComparison.OrdinalIgnoreCase) ? "Error" : "Aviso";
+            AppendLog($"{prefix}: {check.Name} - {check.Describe()}");
         }
+    }
+
+    private bool HasReplaceErrors(ReplaceReport report)
+    {
+        return report.Checks?.Any(check => string.Equals(check.Status, "error", StringComparison.OrdinalIgnoreCase)) == true;
     }
 
     private void ApplyWavLoop()
@@ -606,6 +802,60 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private List<ReplacementJob> BuildReplacementJobs(string singleAudioPath)
+    {
+        if (_replacementQueue.Count == 0)
+        {
+            return
+            [
+                new ReplacementJob(
+                    SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index",
+                    (int)(EntryNumberBox.Value ?? 0),
+                    singleAudioPath)
+            ];
+        }
+
+        return _replacementQueue
+            .Where(item => File.Exists(item.AudioPath))
+            .Select(item => new ReplacementJob(item.SelectorMode, item.Entry, item.AudioPath))
+            .ToList();
+    }
+
+    private void AddReplacementToQueue(string audioPath, int entry)
+    {
+        var selectorMode = SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index";
+        _replacementQueue.Add(new ReplacementQueueItem(selectorMode, Math.Max(0, entry), audioPath));
+        AppendLog($"Cola: {Path.GetFileName(audioPath)} -> {(selectorMode == "--id" ? "ID" : "índice")} {Math.Max(0, entry)}");
+        UpdateCommandPreview();
+    }
+
+    private static int? GuessEntryFromFileName(string path)
+    {
+        var fileName = Path.GetFileNameWithoutExtension(path);
+        var digits = new string(fileName.TakeWhile(char.IsDigit).ToArray());
+        return int.TryParse(digits, out var value) ? value : null;
+    }
+
+    private static bool IsSupportedAudio(string path)
+    {
+        return Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".wav" or ".flac" or ".ogg" or ".mp3" or ".m4a" or ".aac" or ".aiff" or ".aif" => true,
+            _ => false
+        };
+    }
+
+    private static void DeleteIntermediateFiles(IEnumerable<string> paths)
+    {
+        foreach (var path in paths)
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
     private bool ValidateInputs(out string acbPath, out string awbPath, out string wavPath, out string outputDirectory)
     {
         acbPath = AcbPathTextBox.Text?.Trim() ?? "";
@@ -613,11 +863,26 @@ public sealed partial class MainWindow : Window
         wavPath = WavPathTextBox.Text?.Trim() ?? "";
         outputDirectory = OutputDirectoryTextBox.Text?.Trim() ?? "";
 
-        foreach (var path in new[] { acbPath, awbPath, wavPath })
+        foreach (var path in new[] { acbPath, awbPath })
         {
             if (!File.Exists(path))
             {
                 AppendLog($"No existe el archivo: {path}");
+                return false;
+            }
+        }
+
+        if (_replacementQueue.Count == 0 && !File.Exists(wavPath))
+        {
+            AppendLog($"No existe el archivo: {wavPath}");
+            return false;
+        }
+
+        foreach (var item in _replacementQueue)
+        {
+            if (!File.Exists(item.AudioPath))
+            {
+                AppendLog($"No existe el archivo en cola: {item.AudioPath}");
                 return false;
             }
         }
@@ -644,14 +909,19 @@ public sealed partial class MainWindow : Window
 
     private bool TryResolvePatchAwbId(out int awbId)
     {
-        var selectedValue = (int)(EntryNumberBox.Value ?? 0);
-        if (SelectorModeComboBox.SelectedIndex == 0)
+        var selectorMode = SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index";
+        return TryResolvePatchAwbId(new ReplacementJob(selectorMode, (int)(EntryNumberBox.Value ?? 0), ""), out awbId);
+    }
+
+    private bool TryResolvePatchAwbId(ReplacementJob job, out int awbId)
+    {
+        if (job.SelectorMode == "--id")
         {
-            awbId = selectedValue;
+            awbId = job.Entry;
             return true;
         }
 
-        var entry = _awbEntries.FirstOrDefault(item => item.Index == selectedValue);
+        var entry = _awbEntries.FirstOrDefault(item => item.Index == job.Entry);
         if (entry is null)
         {
             awbId = -1;
@@ -894,7 +1164,10 @@ public sealed partial class MainWindow : Window
         var patchIdText = SelectorModeComboBox.SelectedIndex == 0
             ? selectorValue
             : _awbEntries.FirstOrDefault(item => item.Index == (int)(EntryNumberBox.Value ?? 0))?.Id.ToString() ?? "?";
-        CommandPreviewTextBlock.Text = $"replace-awb-wav ... {selectorMode} {selectorValue} / patch-acb-waveform ... --id {patchIdText} / patch-acb-stream-awb ...";
+        var count = _replacementQueue.Count == 0 ? 1 : _replacementQueue.Count;
+        CommandPreviewTextBlock.Text = count == 1
+            ? $"replace-awb-wav ... {selectorMode} {selectorValue} / patch-acb-waveform ... --id {patchIdText} / patch-acb-stream-awb ..."
+            : $"{count} reemplazos en el mismo ACB/AWB / patch-acb-stream-awb al terminar ...";
     }
 
     private async Task<string?> PickFileAsync(string title, IReadOnlyList<FilePickerFileType> filters)
@@ -906,6 +1179,77 @@ public sealed partial class MainWindow : Window
             FileTypeFilter = filters
         });
         return files.Count > 0 ? files[0].TryGetLocalPath() : null;
+    }
+
+    private async Task<string?> PickOutputDirectoryAsync()
+    {
+        var start = OutputDirectoryTextBox.Text?.Trim();
+        var options = new FolderPickerOpenOptions
+        {
+            Title = "Seleccionar carpeta de exportación",
+            AllowMultiple = false
+        };
+        if (!string.IsNullOrWhiteSpace(start) && Directory.Exists(start))
+        {
+            var folder = await StorageProvider.TryGetFolderFromPathAsync(start);
+            if (folder is not null)
+            {
+                options.SuggestedStartLocation = folder;
+            }
+        }
+
+        var folders = await StorageProvider.OpenFolderPickerAsync(options);
+        return folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
+    }
+
+    private async Task LoadBankPairAsync(string path)
+    {
+        var extension = Path.GetExtension(path).ToLowerInvariant();
+        if (extension != ".acb" && extension != ".awb")
+        {
+            return;
+        }
+
+        if (extension == ".acb")
+        {
+            AcbPathTextBox.Text = path;
+            AwbPathTextBox.Text = Path.ChangeExtension(path, ".awb");
+        }
+        else
+        {
+            AwbPathTextBox.Text = path;
+            AcbPathTextBox.Text = Path.ChangeExtension(path, ".acb");
+        }
+
+        SavePreferences();
+        UpdateCommandPreview();
+
+        if (File.Exists(AcbPathTextBox.Text) && File.Exists(AwbPathTextBox.Text))
+        {
+            await InspectAwbAsync();
+        }
+        else
+        {
+            AppendLog("No se encontró el par ACB/AWB junto al archivo seleccionado.");
+        }
+    }
+
+    private async Task TryLoadSiblingBankAsync(string path)
+    {
+        var sibling = Path.ChangeExtension(path, Path.GetExtension(path).Equals(".acb", StringComparison.OrdinalIgnoreCase) ? ".awb" : ".acb");
+        if (File.Exists(sibling))
+        {
+            if (sibling.EndsWith(".acb", StringComparison.OrdinalIgnoreCase))
+            {
+                AcbPathTextBox.Text = sibling;
+            }
+            else
+            {
+                AwbPathTextBox.Text = sibling;
+            }
+
+            await InspectAwbAsync();
+        }
     }
 
     private async Task RestoreSelectedAudioAsync()
@@ -1218,7 +1562,18 @@ public sealed partial class MainWindow : Window
         public string CombinedOutput => string.Join(Environment.NewLine, new[] { Stdout, Stderr }.Where(static value => !string.IsNullOrWhiteSpace(value)));
     }
 
-    private sealed record AwbEntryViewModel(int Index, int Id, string Extension, long Size, string Sha1);
+    private sealed record AwbEntryViewModel(int Index, int Id, string Extension, long Size, string Name);
+
+    private sealed record ReplacementJob(string SelectorMode, int Entry, string AudioPath)
+    {
+        public string Label => $"{(SelectorMode == "--id" ? "ID" : "índice")} {Entry} <- {Path.GetFileName(AudioPath)}";
+    }
+
+    private sealed record ReplacementQueueItem(string SelectorMode, int Entry, string AudioPath)
+    {
+        public string Mode => SelectorMode == "--id" ? "ID" : "Índice";
+        public string AudioName => Path.GetFileName(AudioPath);
+    }
 
     private sealed class UserPreferences
     {
@@ -1246,7 +1601,7 @@ public sealed partial class MainWindow : Window
         public int Id { get; set; }
         public long Size { get; set; }
         public string? Extension { get; set; }
-        public string? Sha1 { get; set; }
+        public string? Name { get; set; }
     }
 
     private sealed class WavInfo

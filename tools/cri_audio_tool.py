@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Small CRI ACB/AWB inspection and AWB replacement tool.
 
-This is intentionally conservative: source files are never modified in place.
-The implementation mirrors the proven parsing rules used by L5Decompiler, but
-keeps write support limited to AFS2/AWB repacking.
+This is intentionally conservative: source files are never modified in place,
+and write support stays limited to AFS2/AWB repacking.
 """
 
 from __future__ import annotations
@@ -142,7 +141,7 @@ def crc32_filename_key(filename: str) -> int:
 
 
 def decrypt_readable_copy(data: bytes, filename: str) -> bytes:
-    """Apply the CRI readable-copy XOR used by L5Decompiler when needed."""
+    """Apply the CRI readable-copy XOR when needed."""
     expected_magic = {
         ".acb": ACB_MAGIC,
         ".awb": AWB_MAGIC,
@@ -353,6 +352,57 @@ def awb_metadata(archive: AwbArchive) -> dict[str, Any]:
             }
             for entry in archive.entries
         ],
+    }
+
+
+def cue_display_name(row: list["UtfField"], cue_index: int) -> str:
+    for name in ("Name", "CueName", "CueNameTable", "UserData"):
+        field = field_by_name(row, name)
+        if field is not None and isinstance(field.value, str) and field.value:
+            return field.value
+    return f"Cue {cue_index}"
+
+
+def acb_awb_clip_names(acb_data: bytes) -> dict[int, str]:
+    table = parse_utf(acb_data)
+    nested = table.nested_tables()
+    waveform_table = nested.get("WaveformTable")
+    cue_table = nested.get("CueTable")
+    if waveform_table is None or cue_table is None:
+        return {}
+
+    sequence_table = nested.get("SequenceTable")
+    synth_table = nested.get("SynthTable")
+    cue_name_table = nested.get("CueNameTable")
+    cue_names_by_index: dict[int, str] = {}
+    if cue_name_table is not None:
+        for row in cue_name_table.rows:
+            cue_index = int_value(row, "CueIndex")
+            cue_name = field_by_name(row, "CueName")
+            if cue_index is not None and isinstance(cue_name.value if cue_name is not None else None, str):
+                cue_names_by_index[cue_index] = cue_name.value
+
+    names_by_awb_id: dict[int, list[str]] = {}
+    for cue_index, cue_row in enumerate(cue_table.rows):
+        cue_name = cue_names_by_index.get(cue_index) or cue_display_name(cue_row, cue_index)
+        for waveform_index in resolve_cue_waveforms(cue_row, waveform_table, sequence_table, synth_table):
+            if waveform_index < 0 or waveform_index >= len(waveform_table.rows):
+                continue
+
+            waveform_row = waveform_table.rows[waveform_index]
+            awb_id = int_value(waveform_row, "StreamAwbId")
+            if awb_id is None or awb_id < 0:
+                awb_id = int_value(waveform_row, "MemoryAwbId")
+            if awb_id is None or awb_id < 0:
+                continue
+
+            names = names_by_awb_id.setdefault(awb_id, [])
+            if cue_name not in names:
+                names.append(cue_name)
+
+    return {
+        awb_id: ", ".join(names[:3]) + ("..." if len(names) > 3 else "")
+        for awb_id, names in names_by_awb_id.items()
     }
 
 
@@ -694,17 +744,6 @@ def data_root() -> Path:
     return audio_root()
 
 
-def find_l5decompiler_root() -> Path | None:
-    candidates = [
-        Path("/Users/bobi/Documents/GitHub/L5Decompiler"),
-        audio_root().parent.parent / "GitHub" / "L5Decompiler",
-    ]
-    for candidate in candidates:
-        if (candidate / "L5Extractor.sln").exists():
-            return candidate
-    return None
-
-
 def ffmpeg_platform_key() -> str:
     system = platform.system().lower()
     machine = platform.machine().lower()
@@ -783,13 +822,6 @@ def resolve_ffmpeg(download: bool = True) -> tuple[str, str]:
     ])
     candidates.extend(plugin_executables(data_root() / "PlugIns", ("ffmpeg", "ffmpeg.exe")))
     candidates.extend(plugin_executables(audio_root() / "PlugIns", ("ffmpeg", "ffmpeg.exe")))
-    if find_l5decompiler_root() is not None:
-        l5_root = find_l5decompiler_root()
-        candidates.extend([
-            l5_root / ".cache" / "dependencies" / ("ffmpeg.exe" if platform.system().lower() == "windows" else "ffmpeg"),
-            l5_root / "PlugIns" / ("ffmpeg.exe" if platform.system().lower() == "windows" else "ffmpeg"),
-        ])
-
     for candidate in candidates:
         if tool_available(candidate, ["-version"]):
             return str(candidate), "existing"
@@ -836,14 +868,6 @@ def resolve_vgmstream(explicit: str | None = None) -> tuple[str | None, str]:
     ])
     candidates.extend(plugin_executables(data_root() / "PlugIns", ("vgmstream-cli", "vgmstream-cli.exe")))
     candidates.extend(plugin_executables(audio_root() / "PlugIns", ("vgmstream-cli", "vgmstream-cli.exe")))
-    l5_root = find_l5decompiler_root()
-    if l5_root is not None:
-        candidates.extend([
-            l5_root / "PlugIns" / "Mac" / "vgmstream-cli",
-            l5_root / "PlugIns" / "Linux" / "vgmstream-cli",
-            l5_root / "PlugIns" / "Windows" / "vgmstream-cli.exe",
-        ])
-
     for candidate in candidates:
         if vgmstream_available(candidate):
             return str(candidate), "existing"
@@ -868,38 +892,6 @@ def copy_vgmstream_bundle(source_executable: Path, destination_executable: Path)
             shutil.copy2(dependency, destination_executable.parent / dependency.name)
     else:
         destination_executable.chmod(destination_executable.stat().st_mode | 0o755)
-
-
-def find_l5decompiler_vgmstream() -> Path | None:
-    l5_root = find_l5decompiler_root()
-    if l5_root is None:
-        return None
-
-    system = platform.system().lower()
-    if system == "windows":
-        candidates = [l5_root / "PlugIns" / "Windows" / "vgmstream-cli.exe"]
-    elif system == "linux":
-        candidates = [l5_root / "PlugIns" / "Linux" / "vgmstream-cli"]
-    else:
-        candidates = [l5_root / "PlugIns" / "Mac" / "vgmstream-cli"]
-
-    for candidate in candidates:
-        if candidate.exists() and vgmstream_available(candidate):
-            return candidate
-    return None
-
-
-def integrate_vgmstream_from_l5decompiler() -> tuple[str | None, str]:
-    source = find_l5decompiler_vgmstream()
-    if source is None:
-        return None, "missing"
-
-    destination = bundled_vgmstream_destination()
-    if source.resolve() != destination.resolve():
-        copy_vgmstream_bundle(source, destination)
-    if vgmstream_available(destination):
-        return str(destination), "copied-from-l5decompiler"
-    return None, "copy-failed"
 
 
 def vgmstream_asset_name() -> str:
@@ -1204,9 +1196,12 @@ def build_replace_checks(
     })
     new_version = hca_report.get("hcaVersion") if isinstance(hca_report, dict) else None
     if new_version is not None:
+        original_version = int(original_hca.get("Version") or 0)
+        encoded_version = int(new_version or 0)
+        status = "ok" if original_version == encoded_version else "warning"
         checks.append({
             "name": "hca_version",
-            "status": "warning" if int(original_hca.get("Version") or 0) != int(new_version or 0) else "ok",
+            "status": status,
             "original_version": original_hca.get("Version"),
             "new_version": new_version,
         })
@@ -1226,6 +1221,10 @@ def cmd_inspect(args: argparse.Namespace) -> None:
 
     if data.startswith(AWB_MAGIC):
         metadata = awb_metadata(parse_awb(data))
+        if args.acb:
+            clip_names = acb_awb_clip_names(read_cri(Path(args.acb)))
+            for entry in metadata["entries"]:
+                entry["name"] = clip_names.get(entry["id"], "")
         if output:
             write_json(output / f"{source.name}.metadata.json", metadata)
         print(json.dumps(metadata, ensure_ascii=False, indent=2))
@@ -1256,8 +1255,6 @@ def cmd_ensure_plugins(args: argparse.Namespace) -> None:
     checks: list[dict[str, Any]] = []
 
     vgmstream_path, vgmstream_source = resolve_vgmstream(args.vgmstream)
-    if vgmstream_path is None:
-        vgmstream_path, vgmstream_source = integrate_vgmstream_from_l5decompiler()
     if vgmstream_path is None and not args.no_vgmstream_download:
         try:
             vgmstream_path, vgmstream_source = download_vgmstream()
@@ -1815,6 +1812,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     inspect_parser = subparsers.add_parser("inspect", help="Inspect ACB/AWB metadata.")
     inspect_parser.add_argument("source")
+    inspect_parser.add_argument("--acb", help="Optional ACB used to resolve AWB clip/cue names.")
     inspect_parser.add_argument("--output")
     inspect_parser.add_argument("--summary", action="store_true", help="Omit full ACB row dumps from JSON.")
     inspect_parser.set_defaults(func=cmd_inspect)
