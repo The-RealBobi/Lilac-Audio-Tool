@@ -40,7 +40,6 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer _playbackTimer;
     private TimeSpan _playbackOffset;
     private DateTime _playbackStartedAt;
-    private bool _playbackPaused;
     private TimelineDragMode _timelineDragMode = TimelineDragMode.None;
 
     public MainWindow()
@@ -305,7 +304,7 @@ public sealed partial class MainWindow : Window
     {
         if (_playbackProcess is not null && !_playbackProcess.HasExited)
         {
-            TogglePlaybackPause();
+            StopPlayback();
             return;
         }
 
@@ -1177,7 +1176,6 @@ public sealed partial class MainWindow : Window
 
         _playbackOffset = TimeSpan.Zero;
         _playbackStartedAt = DateTime.UtcNow;
-        _playbackPaused = false;
         PlaybackButton.Content = "⏸";
         _playbackTimer.Start();
     }
@@ -1217,39 +1215,6 @@ public sealed partial class MainWindow : Window
         return true;
     }
 
-    private void TogglePlaybackPause()
-    {
-        if (_playbackProcess is null || _playbackProcess.HasExited)
-        {
-            StopPlayback();
-            return;
-        }
-
-        if (!OperatingSystem.IsMacOS())
-        {
-            StopPlayback();
-            return;
-        }
-
-        if (_playbackPaused)
-        {
-            SendSignal(_playbackProcess.Id, "CONT");
-            _playbackStartedAt = DateTime.UtcNow;
-            _playbackPaused = false;
-            PlaybackButton.Content = "⏸";
-            _playbackTimer.Start();
-        }
-        else
-        {
-            _playbackOffset = CurrentPlaybackPosition();
-            SendSignal(_playbackProcess.Id, "STOP");
-            _playbackPaused = true;
-            PlaybackButton.Content = "▶";
-            _playbackTimer.Stop();
-            UpdatePlaybackVisuals();
-        }
-    }
-
     private void StopPlayback()
     {
         _playbackTimer.Stop();
@@ -1274,7 +1239,6 @@ public sealed partial class MainWindow : Window
         }
 
         _playbackOffset = TimeSpan.Zero;
-        _playbackPaused = false;
         if (PlaybackButton is not null)
         {
             PlaybackButton.Content = "▶";
@@ -1301,7 +1265,7 @@ public sealed partial class MainWindow : Window
 
     private TimeSpan CurrentPlaybackPosition()
     {
-        return _playbackPaused ? _playbackOffset : _playbackOffset + (DateTime.UtcNow - _playbackStartedAt);
+        return _playbackOffset + (DateTime.UtcNow - _playbackStartedAt);
     }
 
     private TimeSpan AudioDuration()
@@ -1322,16 +1286,6 @@ public sealed partial class MainWindow : Window
         var progress = duration <= TimeSpan.Zero ? 0 : CurrentPlaybackPosition().TotalSeconds / duration.TotalSeconds;
         progress = Math.Clamp(progress, 0, 1);
         LoopTimeline.PlayheadSample = _wavSamples <= 0 ? 0 : (int)Math.Round(_wavSamples * progress);
-    }
-
-    private static void SendSignal(int pid, string signal)
-    {
-        using var process = Process.Start(new ProcessStartInfo("kill", [$"-{signal}", pid.ToString()])
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true
-        });
-        process?.WaitForExit();
     }
 
     private string DescribeLoop()
