@@ -749,7 +749,7 @@ def resolve_loop_points(args: argparse.Namespace, wav_path: Path) -> tuple[int |
     if args.loop_start is not None or args.loop_end is not None:
         if args.loop_start is None or args.loop_end is None:
             raise ValueError("Both --loop-start and --loop-end are required")
-        sample_count = wav_sample_count(wav_path)
+        sample_count = int(audio_info(wav_path).get("sample_count") or 0)
         if args.loop_start < 0 or args.loop_end <= args.loop_start or args.loop_end > sample_count:
             raise ValueError(f"Invalid loop range {args.loop_start}..{args.loop_end} for {sample_count} samples")
         return args.loop_start, args.loop_end, "explicit"
@@ -757,7 +757,7 @@ def resolve_loop_points(args: argparse.Namespace, wav_path: Path) -> tuple[int |
     if getattr(args, "loop_mode", "auto") == "auto":
         loop = wav_smpl_loop(wav_path)
         if loop is not None:
-            sample_count = wav_sample_count(wav_path)
+            sample_count = int(audio_info(wav_path).get("sample_count") or 0)
             if loop[0] < 0 or loop[1] <= loop[0] or loop[1] > sample_count:
                 raise ValueError(f"Invalid WAV smpl loop range {loop[0]}..{loop[1]} for {sample_count} samples")
             return loop[0], loop[1], "wav-smpl"

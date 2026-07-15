@@ -6,7 +6,7 @@
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
     <UseAppHost>true</UseAppHost>
-    <Version>0.2.5</Version>
+    <Version>0.2.6</Version>
     <ApplicationIcon>Assets/icon.ico</ApplicationIcon>
   </PropertyGroup>
 
