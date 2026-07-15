@@ -315,7 +315,7 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
         {
             var wavPath = WavPathTextBox.Text?.Trim();
-            if (!string.IsNullOrWhiteSpace(wavPath) && File.Exists(wavPath) && _wavSamples > 0)
+            if (!string.IsNullOrWhiteSpace(wavPath) && File.Exists(wavPath))
             {
                 source = wavPath;
                 SetPlayerSource(source);
@@ -324,7 +324,7 @@ public sealed partial class MainWindow : Window
 
         if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
         {
-            AppendLog("No hay un audio cargado para reproducir. Usa un audio de reemplazo o previsualiza una entrada AWB.");
+            AppendLog("Selecciona un audio en la cola de cambios para reproducirlo, o usa Reproducir entrada para escuchar el AWB.");
             return;
         }
 
@@ -578,10 +578,7 @@ public sealed partial class MainWindow : Window
 
         WavPathTextBox.Text = path;
         await LoadWavInfoAsync(path);
-        if (_wavSamples > 0)
-        {
-            SetPlayerSource(path);
-        }
+        SetPlayerSource(path);
 
         AddReplacementToQueue(path, (int)(EntryNumberBox.Value ?? 0));
         SavePreferences();
@@ -629,10 +626,7 @@ public sealed partial class MainWindow : Window
 
         WavPathTextBox.Text = item.AudioPath;
         await LoadWavInfoAsync(item.AudioPath);
-        if (_wavSamples > 0)
-        {
-            SetPlayerSource(item.AudioPath);
-        }
+        SetPlayerSource(item.AudioPath);
         SavePreferences();
     }
 
@@ -803,7 +797,6 @@ public sealed partial class MainWindow : Window
         if (result.ExitCode != 0)
         {
             StopPlayback();
-            _playerSourcePath = null;
             _wavSamples = 0;
             _wavSampleRate = 0;
             _wavLoopStart = null;
