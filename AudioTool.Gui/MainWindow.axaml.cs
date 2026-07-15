@@ -58,7 +58,6 @@ public sealed partial class MainWindow : Window
         KeepHcaCheckBox.IsCheckedChanged += OnPreferenceChanged;
         KeepReportsCheckBox.IsCheckedChanged += OnPreferenceChanged;
         UseModSuffixCheckBox.IsCheckedChanged += OnPreferenceChanged;
-        PatchWaveformCheckBox.IsCheckedChanged += OnPreferenceChanged;
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
         AddHandler(DragDrop.DropEvent, OnDrop);
         LoadPreferences();
@@ -92,7 +91,6 @@ public sealed partial class MainWindow : Window
         KeepHcaCheckBox.Content = strings.KeepHca;
         KeepReportsCheckBox.Content = strings.KeepReports;
         UseModSuffixCheckBox.Content = strings.UseModSuffix;
-        PatchWaveformCheckBox.Content = strings.PatchWaveform;
         ExecuteButton.Content = strings.Export;
         EntriesHeaderTextBlock.Text = strings.Entries;
         OperationHeaderTextBlock.Text = strings.Operation;
@@ -368,7 +366,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (PatchWaveformCheckBox.IsChecked == true && jobs.Any(job => !TryResolvePatchAwbId(job, out _)))
+        if (jobs.Any(job => !TryResolvePatchAwbId(job, out _)))
         {
             return;
         }
@@ -427,65 +425,55 @@ public sealed partial class MainWindow : Window
                     return;
                 }
 
-                if (PatchWaveformCheckBox.IsChecked == true)
+                if (!TryResolvePatchAwbId(job, out var patchAwbId))
                 {
-                    if (!TryResolvePatchAwbId(job, out var patchAwbId))
-                    {
-                        return;
-                    }
-
-                    var patchArgs = new List<string>
-                    {
-                        "patch-acb-waveform",
-                        currentAcb,
-                        nextAcb,
-                        "--id",
-                        patchAwbId.ToString(),
-                        "--samples",
-                        replaceReport.EffectiveSampleCount.ToString(),
-                        "--encode-type",
-                        "2"
-                    };
-                    if (replaceReport.PreparedWavInfo?.Channels is > 0)
-                    {
-                        patchArgs.Add("--channels");
-                        patchArgs.Add(replaceReport.PreparedWavInfo.Channels.Value.ToString());
-                    }
-                    if (replaceReport.PreparedWavInfo?.SampleRate is > 0)
-                    {
-                        patchArgs.Add("--sampling-rate");
-                        patchArgs.Add(replaceReport.PreparedWavInfo.SampleRate.Value.ToString());
-                    }
-
-                    if (replaceReport.LoopStart is not null && replaceReport.LoopEnd is not null)
-                    {
-                        patchArgs.Add("--loop-start");
-                        patchArgs.Add(replaceReport.LoopStart.Value.ToString());
-                        patchArgs.Add("--loop-end");
-                        patchArgs.Add(replaceReport.LoopEnd.Value.ToString());
-                    }
-                    else
-                    {
-                        patchArgs.Add("--no-loop");
-                    }
-                    AppendLog($"Parcheando WaveformTable del ACB ({i + 1}/{jobs.Count})...");
-                    var patchResult = await RunPythonAsync(patchArgs);
-                    AppendLog(patchResult.CombinedOutput);
-                    if (patchResult.ExitCode != 0)
-                    {
-                        return;
-                    }
-
-                    currentAcb = nextAcb;
+                    return;
                 }
 
-                currentAwb = nextAwb;
-            }
+                var patchArgs = new List<string>
+                {
+                    "patch-acb-waveform",
+                    currentAcb,
+                    nextAcb,
+                    "--id",
+                    patchAwbId.ToString(),
+                    "--samples",
+                    replaceReport.EffectiveSampleCount.ToString(),
+                    "--encode-type",
+                    "2"
+                };
+                if (replaceReport.PreparedWavInfo?.Channels is > 0)
+                {
+                    patchArgs.Add("--channels");
+                    patchArgs.Add(replaceReport.PreparedWavInfo.Channels.Value.ToString());
+                }
+                if (replaceReport.PreparedWavInfo?.SampleRate is > 0)
+                {
+                    patchArgs.Add("--sampling-rate");
+                    patchArgs.Add(replaceReport.PreparedWavInfo.SampleRate.Value.ToString());
+                }
 
-            if (PatchWaveformCheckBox.IsChecked != true)
-            {
-                File.Copy(acbPath, targetAcb, overwrite: true);
-                AppendLog("ACB conservado; sólo se actualizará su vínculo con el AWB.");
+                if (replaceReport.LoopStart is not null && replaceReport.LoopEnd is not null)
+                {
+                    patchArgs.Add("--loop-start");
+                    patchArgs.Add(replaceReport.LoopStart.Value.ToString());
+                    patchArgs.Add("--loop-end");
+                    patchArgs.Add(replaceReport.LoopEnd.Value.ToString());
+                }
+                else
+                {
+                    patchArgs.Add("--no-loop");
+                }
+                AppendLog($"Parcheando WaveformTable del ACB ({i + 1}/{jobs.Count})...");
+                var patchResult = await RunPythonAsync(patchArgs);
+                AppendLog(patchResult.CombinedOutput);
+                if (patchResult.ExitCode != 0)
+                {
+                    return;
+                }
+
+                currentAcb = nextAcb;
+                currentAwb = nextAwb;
             }
 
             var streamPatchArgs = new List<string>
@@ -678,10 +666,7 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(selectedAudio) && File.Exists(selectedAudio))
         {
             await LoadWavInfoAsync(selectedAudio);
-            if (_wavSamples > 0)
-            {
-                SetPlayerSource(selectedAudio);
-            }
+            SetPlayerSource(selectedAudio);
         }
 
         SavePreferences();
@@ -1180,8 +1165,12 @@ public sealed partial class MainWindow : Window
         }
 
         StopPlayback();
-        if (!TryStartControlledPlayback(_playerSourcePath))
+        if (!TryStartControlledPlayback(_playerSourcePath, out var error))
         {
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                AppendLog(error);
+            }
             OpenWithSystemPlayer(_playerSourcePath);
             return;
         }
@@ -1193,8 +1182,9 @@ public sealed partial class MainWindow : Window
         _playbackTimer.Start();
     }
 
-    private bool TryStartControlledPlayback(string path)
+    private bool TryStartControlledPlayback(string path, out string? error)
     {
+        error = null;
         if (!OperatingSystem.IsMacOS())
         {
             return false;
@@ -1203,10 +1193,28 @@ public sealed partial class MainWindow : Window
         var startInfo = new ProcessStartInfo("afplay", [path])
         {
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            RedirectStandardError = true
         };
         _playbackProcess = Process.Start(startInfo);
-        return _playbackProcess is not null;
+        if (_playbackProcess is null)
+        {
+            error = "No se pudo iniciar el reproductor integrado.";
+            return false;
+        }
+
+        if (_playbackProcess.WaitForExit(120))
+        {
+            var stderr = _playbackProcess.StandardError.ReadToEnd().Trim();
+            _playbackProcess.Dispose();
+            _playbackProcess = null;
+            error = string.IsNullOrWhiteSpace(stderr)
+                ? "El reproductor integrado no pudo reproducir ese archivo."
+                : $"El reproductor integrado no pudo reproducir ese archivo: {stderr}";
+            return false;
+        }
+
+        return true;
     }
 
     private void TogglePlaybackPause()
@@ -1508,7 +1516,6 @@ public sealed partial class MainWindow : Window
             KeepHcaCheckBox.IsChecked = preferences.KeepHca;
             KeepReportsCheckBox.IsChecked = preferences.KeepReports;
             UseModSuffixCheckBox.IsChecked = preferences.UseModSuffix;
-            PatchWaveformCheckBox.IsChecked = preferences.PatchWaveform;
         }
         catch (Exception ex)
         {
@@ -1542,8 +1549,7 @@ public sealed partial class MainWindow : Window
                 LoopEnd = (int)(LoopEndBox.Value ?? 0),
                 KeepHca = KeepHcaCheckBox.IsChecked == true,
                 KeepReports = KeepReportsCheckBox.IsChecked == true,
-                UseModSuffix = UseModSuffixCheckBox.IsChecked == true,
-                PatchWaveform = PatchWaveformCheckBox.IsChecked == true
+                UseModSuffix = UseModSuffixCheckBox.IsChecked == true
             };
 
             Directory.CreateDirectory(Path.GetDirectoryName(_preferencesPath)!);
@@ -1793,7 +1799,6 @@ public sealed partial class MainWindow : Window
             KeepHca = "Conservar HCA generado junto al AWB",
             KeepReports = "Conservar reports/logs de exportación",
             UseModSuffix = "Añadir sufijo .mod",
-            PatchWaveform = "Actualizar duración y formato en WaveformTable",
             Export = "Export",
             Entries = "Entradas AWB",
             Operation = "Operación",
@@ -1836,7 +1841,6 @@ public sealed partial class MainWindow : Window
             KeepHca = "Keep generated HCA next to the AWB",
             KeepReports = "Keep export reports/logs",
             UseModSuffix = "Append .mod suffix",
-            PatchWaveform = "Update duration and format in WaveformTable",
             Export = "Export",
             Entries = "AWB Entries",
             Operation = "Operation",
@@ -1877,7 +1881,6 @@ public sealed partial class MainWindow : Window
         public string KeepHca { get; init; } = "";
         public string KeepReports { get; init; } = "";
         public string UseModSuffix { get; init; } = "";
-        public string PatchWaveform { get; init; } = "";
         public string Export { get; init; } = "";
         public string Entries { get; init; } = "";
         public string Operation { get; init; } = "";
@@ -1919,7 +1922,6 @@ public sealed partial class MainWindow : Window
         public bool KeepHca { get; set; } = true;
         public bool KeepReports { get; set; }
         public bool UseModSuffix { get; set; } = true;
-        public bool PatchWaveform { get; set; } = true;
     }
 
     private sealed class AwbMetadata
