@@ -14,6 +14,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 
@@ -57,7 +58,6 @@ public sealed partial class MainWindow : Window
         KeepHcaCheckBox.IsCheckedChanged += OnPreferenceChanged;
         KeepReportsCheckBox.IsCheckedChanged += OnPreferenceChanged;
         UseModSuffixCheckBox.IsCheckedChanged += OnPreferenceChanged;
-        OverwriteOutputCheckBox.IsCheckedChanged += OnPreferenceChanged;
         PatchWaveformCheckBox.IsCheckedChanged += OnPreferenceChanged;
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
         AddHandler(DragDrop.DropEvent, OnDrop);
@@ -92,7 +92,6 @@ public sealed partial class MainWindow : Window
         KeepHcaCheckBox.Content = strings.KeepHca;
         KeepReportsCheckBox.Content = strings.KeepReports;
         UseModSuffixCheckBox.Content = strings.UseModSuffix;
-        OverwriteOutputCheckBox.Content = strings.OverwriteOutput;
         PatchWaveformCheckBox.Content = strings.PatchWaveform;
         ExecuteButton.Content = strings.Export;
         EntriesHeaderTextBlock.Text = strings.Entries;
@@ -364,7 +363,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (!PrepareOverwrite(targetAcb, targetAwb))
+        if (!await PrepareOverwriteAsync(targetAcb, targetAwb))
         {
             return;
         }
@@ -951,7 +950,7 @@ public sealed partial class MainWindow : Window
         return Path.Combine(outputDirectory, $"{Path.GetFileNameWithoutExtension(sourcePath)}{suffix}{extension}");
     }
 
-    private bool PrepareOverwrite(params string[] paths)
+    private async Task<bool> PrepareOverwriteAsync(params string[] paths)
     {
         var existing = paths.Where(File.Exists).ToList();
         if (existing.Count == 0)
@@ -959,18 +958,70 @@ public sealed partial class MainWindow : Window
             return true;
         }
 
-        if (OverwriteOutputCheckBox.IsChecked == true)
+        if (!await ConfirmOverwriteAsync(existing))
         {
-            foreach (var path in existing)
-            {
-                File.Delete(path);
-                DeleteExportReportsFor(path);
-            }
-            return true;
+            AppendLog(UiText.Current.OverwriteCancelled);
+            return false;
         }
 
-        AppendLog(UiText.Current.OutputExists(string.Join(", ", existing.Select(Path.GetFileName))));
-        return false;
+        foreach (var path in existing)
+        {
+            File.Delete(path);
+            DeleteExportReportsFor(path);
+        }
+
+        return true;
+    }
+
+    private async Task<bool> ConfirmOverwriteAsync(IReadOnlyCollection<string> existingPaths)
+    {
+        var names = string.Join(Environment.NewLine, existingPaths.Select(path => $"- {Path.GetFileName(path)}"));
+        var message = new TextBlock
+        {
+            Text = $"{UiText.Current.OutputExistsPrompt}{Environment.NewLine}{Environment.NewLine}{names}",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            MaxWidth = 520
+        };
+        var overwriteButton = new Button
+        {
+            Content = UiText.Current.Overwrite,
+            MinWidth = 110,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        var cancelButton = new Button
+        {
+            Content = UiText.Current.Cancel,
+            MinWidth = 110,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        var dialog = new Window
+        {
+            Title = UiText.Current.OverwriteTitle,
+            Width = 560,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Avalonia.Thickness(18),
+                Spacing = 18,
+                Children =
+                {
+                    message,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        Spacing = 8,
+                        Children = { cancelButton, overwriteButton }
+                    }
+                }
+            }
+        };
+
+        cancelButton.Click += (_, _) => dialog.Close(false);
+        overwriteButton.Click += (_, _) => dialog.Close(true);
+        return await dialog.ShowDialog<bool>(this);
     }
 
     private static bool IsSamePath(string first, string second)
@@ -1464,7 +1515,6 @@ public sealed partial class MainWindow : Window
             KeepHcaCheckBox.IsChecked = preferences.KeepHca;
             KeepReportsCheckBox.IsChecked = preferences.KeepReports;
             UseModSuffixCheckBox.IsChecked = preferences.UseModSuffix;
-            OverwriteOutputCheckBox.IsChecked = preferences.OverwriteOutput;
             PatchWaveformCheckBox.IsChecked = preferences.PatchWaveform;
         }
         catch (Exception ex)
@@ -1500,7 +1550,6 @@ public sealed partial class MainWindow : Window
                 KeepHca = KeepHcaCheckBox.IsChecked == true,
                 KeepReports = KeepReportsCheckBox.IsChecked == true,
                 UseModSuffix = UseModSuffixCheckBox.IsChecked == true,
-                OverwriteOutput = OverwriteOutputCheckBox.IsChecked == true,
                 PatchWaveform = PatchWaveformCheckBox.IsChecked == true
             };
 
@@ -1751,7 +1800,6 @@ public sealed partial class MainWindow : Window
             KeepHca = "Conservar HCA generado junto al AWB",
             KeepReports = "Conservar reports/logs de exportación",
             UseModSuffix = "Añadir sufijo .mod",
-            OverwriteOutput = "Sobreescribir salida existente",
             PatchWaveform = "Actualizar duración y formato en WaveformTable",
             Export = "Export",
             Entries = "Entradas AWB",
@@ -1770,7 +1818,11 @@ public sealed partial class MainWindow : Window
             Manual = "Manual",
             NoLoop = "Sin loop",
             AudioMissingPrefix = "No existe el archivo en cola",
-            OutputExistsPrefix = "La salida ya existe. Activa sobreescritura para reemplazar",
+            OutputExistsPrompt = "Ya existen archivos de salida. ¿Quieres sobrescribirlos?",
+            OverwriteTitle = "Sobreescribir salida",
+            Overwrite = "Sobreescribir",
+            Cancel = "Cancelar",
+            OverwriteCancelled = "Exportación cancelada: la salida ya existe.",
             OutputMatchesSource = "La salida coincide con el banco original. Elige otra carpeta o activa el sufijo .mod para no sobrescribir la fuente."
         };
 
@@ -1791,7 +1843,6 @@ public sealed partial class MainWindow : Window
             KeepHca = "Keep generated HCA next to the AWB",
             KeepReports = "Keep export reports/logs",
             UseModSuffix = "Append .mod suffix",
-            OverwriteOutput = "Overwrite existing output",
             PatchWaveform = "Update duration and format in WaveformTable",
             Export = "Export",
             Entries = "AWB Entries",
@@ -1810,7 +1861,11 @@ public sealed partial class MainWindow : Window
             Manual = "Manual",
             NoLoop = "No loop",
             AudioMissingPrefix = "Queued file does not exist",
-            OutputExistsPrefix = "Output already exists. Enable overwrite to replace",
+            OutputExistsPrompt = "Output files already exist. Do you want to overwrite them?",
+            OverwriteTitle = "Overwrite output",
+            Overwrite = "Overwrite",
+            Cancel = "Cancel",
+            OverwriteCancelled = "Export cancelled: output already exists.",
             OutputMatchesSource = "The output path matches the original bank. Choose another folder or keep the .mod suffix to avoid overwriting the source."
         };
 
@@ -1829,7 +1884,6 @@ public sealed partial class MainWindow : Window
         public string KeepHca { get; init; } = "";
         public string KeepReports { get; init; } = "";
         public string UseModSuffix { get; init; } = "";
-        public string OverwriteOutput { get; init; } = "";
         public string PatchWaveform { get; init; } = "";
         public string Export { get; init; } = "";
         public string Entries { get; init; } = "";
@@ -1848,11 +1902,14 @@ public sealed partial class MainWindow : Window
         public string Manual { get; init; } = "";
         public string NoLoop { get; init; } = "";
         public string AudioMissingPrefix { get; init; } = "";
-        public string OutputExistsPrefix { get; init; } = "";
+        public string OutputExistsPrompt { get; init; } = "";
+        public string OverwriteTitle { get; init; } = "";
+        public string Overwrite { get; init; } = "";
+        public string Cancel { get; init; } = "";
+        public string OverwriteCancelled { get; init; } = "";
         public string OutputMatchesSource { get; init; } = "";
 
         public string AudioMissing(string path) => $"{AudioMissingPrefix}: {path}";
-        public string OutputExists(string names) => $"{OutputExistsPrefix}: {names}";
     }
 
     private sealed class UserPreferences
@@ -1869,7 +1926,6 @@ public sealed partial class MainWindow : Window
         public bool KeepHca { get; set; } = true;
         public bool KeepReports { get; set; }
         public bool UseModSuffix { get; set; } = true;
-        public bool OverwriteOutput { get; set; }
         public bool PatchWaveform { get; set; }
     }
 
