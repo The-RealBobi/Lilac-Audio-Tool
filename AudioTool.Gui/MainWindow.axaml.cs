@@ -1926,7 +1926,7 @@ public sealed partial class MainWindow : Window
         public bool KeepHca { get; set; } = true;
         public bool KeepReports { get; set; }
         public bool UseModSuffix { get; set; } = true;
-        public bool PatchWaveform { get; set; }
+        public bool PatchWaveform { get; set; } = true;
     }
 
     private sealed class AwbMetadata

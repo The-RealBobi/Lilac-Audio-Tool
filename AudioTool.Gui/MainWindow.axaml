@@ -137,7 +137,7 @@
                 <CheckBox Grid.Row="3" x:Name="KeepHcaCheckBox" Content="Conservar HCA generado junto al AWB" IsChecked="True" />
                 <CheckBox Grid.Row="4" x:Name="KeepReportsCheckBox" Content="Conservar reports/logs de exportación" IsChecked="False" />
                 <CheckBox Grid.Row="5" x:Name="UseModSuffixCheckBox" Content="Añadir sufijo .mod" IsChecked="True" />
-                <CheckBox Grid.Row="6" x:Name="PatchWaveformCheckBox" Content="Actualizar duración y formato en WaveformTable" IsChecked="False" />
+                <CheckBox Grid.Row="6" x:Name="PatchWaveformCheckBox" Content="Actualizar duración y formato en WaveformTable" IsChecked="True" />
               </Grid>
             </Border>
 
