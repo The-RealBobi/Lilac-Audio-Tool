@@ -1780,7 +1780,7 @@ def cmd_patch_acb_waveform(args: argparse.Namespace) -> None:
                 continue
 
             old_length = int_value(row, "Length")
-            if old_length is None or old_length == 0xFFFFFFFF:
+            if old_length is None:
                 continue
 
             old_wave_durations = [old_durations_ms.get(index) for index in waveform_indices]
@@ -1796,8 +1796,9 @@ def cmd_patch_acb_waveform(args: argparse.Namespace) -> None:
             old_max = max(old_wave_durations)
             new_max = max(new_wave_durations)
             single_changed = len(waveform_indices) == 1 and waveform_indices[0] in changed_set
+            infinite_no_loop = old_length == 0xFFFFFFFF and loop_start is None and loop_end is None
             length_matches_waveform = abs(old_length - old_max) <= 2
-            if single_changed or length_matches_waveform:
+            if infinite_no_loop or single_changed or length_matches_waveform:
                 write_be_int(data, length.offset, length.size, new_max)
                 changed_cues.append(cue_index)
 
