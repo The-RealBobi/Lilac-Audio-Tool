@@ -136,6 +136,39 @@ def normalize_hca_type1_to_plain(path: Path) -> bool:
     return True
 
 
+def match_hca_header_profile(path: Path, original_hca: dict[str, Any]) -> bool:
+    original_body = original_hca.get("Hca") or {}
+    original_version = int(original_hca.get("Version") or 0)
+    original_min_resolution = original_body.get("MinResolution")
+    if original_version <= 0 and original_min_resolution is None:
+        return False
+
+    data = bytearray(path.read_bytes())
+    if not data.startswith(HCA_MAGIC):
+        return False
+
+    changed = False
+    if original_version > 0:
+        current_version = struct.unpack_from(">H", data, 4)[0]
+        if current_version != original_version:
+            struct.pack_into(">H", data, 4, original_version)
+            changed = True
+
+    if original_min_resolution is not None:
+        header_size = struct.unpack_from(">H", data, 6)[0]
+        comp_offset = find_hca_chunk(data, b"comp", header_size)
+        if comp_offset >= 0:
+            min_resolution_offset = comp_offset + 6
+            min_resolution = int(original_min_resolution)
+            if 0 <= min_resolution <= 0xFF and data[min_resolution_offset] != min_resolution:
+                data[min_resolution_offset] = min_resolution
+                changed = True
+
+    if changed:
+        path.write_bytes(data)
+    return changed
+
+
 def crc32_filename_key(filename: str) -> int:
     return binascii.crc32(filename.encode("utf-8")) & 0xFFFFFFFF
 
@@ -352,6 +385,57 @@ def awb_metadata(archive: AwbArchive) -> dict[str, Any]:
             }
             for entry in archive.entries
         ],
+    }
+
+
+def cue_display_name(row: list["UtfField"], cue_index: int) -> str:
+    for name in ("Name", "CueName", "CueNameTable", "UserData"):
+        field = field_by_name(row, name)
+        if field is not None and isinstance(field.value, str) and field.value:
+            return field.value
+    return f"Cue {cue_index}"
+
+
+def acb_awb_clip_names(acb_data: bytes) -> dict[int, str]:
+    table = parse_utf(acb_data)
+    nested = table.nested_tables()
+    waveform_table = nested.get("WaveformTable")
+    cue_table = nested.get("CueTable")
+    if waveform_table is None or cue_table is None:
+        return {}
+
+    sequence_table = nested.get("SequenceTable")
+    synth_table = nested.get("SynthTable")
+    cue_name_table = nested.get("CueNameTable")
+    cue_names_by_index: dict[int, str] = {}
+    if cue_name_table is not None:
+        for row in cue_name_table.rows:
+            cue_index = int_value(row, "CueIndex")
+            cue_name = field_by_name(row, "CueName")
+            if cue_index is not None and isinstance(cue_name.value if cue_name is not None else None, str):
+                cue_names_by_index[cue_index] = cue_name.value
+
+    names_by_awb_id: dict[int, list[str]] = {}
+    for cue_index, cue_row in enumerate(cue_table.rows):
+        cue_name = cue_names_by_index.get(cue_index) or cue_display_name(cue_row, cue_index)
+        for waveform_index in resolve_cue_waveforms(cue_row, waveform_table, sequence_table, synth_table):
+            if waveform_index < 0 or waveform_index >= len(waveform_table.rows):
+                continue
+
+            waveform_row = waveform_table.rows[waveform_index]
+            awb_id = int_value(waveform_row, "StreamAwbId")
+            if awb_id is None or awb_id < 0:
+                awb_id = int_value(waveform_row, "MemoryAwbId")
+            if awb_id is None or awb_id < 0:
+                continue
+
+            names = names_by_awb_id.setdefault(awb_id, [])
+            if cue_name not in names:
+                names.append(cue_name)
+
+    return {
+        awb_id: ", ".join(names[:3]) + ("..." if len(names) > 3 else "")
+        for awb_id, names in names_by_awb_id.items()
     }
 
 
@@ -594,6 +678,41 @@ def wav_info(path: Path) -> dict[str, Any]:
     }
 
 
+def audio_info(path: Path) -> dict[str, Any]:
+    try:
+        return wav_info(path)
+    except (wave.Error, EOFError):
+        pass
+
+    ffmpeg_path, ffmpeg_source = resolve_ffmpeg(download=True)
+    work_dir = data_root() / "work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="cri_audio_info_", dir=str(work_dir)) as temp_dir:
+        prepared_wav = Path(temp_dir) / f"{path.stem}.analysis.wav"
+        command = [
+            ffmpeg_path,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(path),
+            "-vn",
+            "-acodec",
+            "pcm_s16le",
+            str(prepared_wav),
+        ]
+        subprocess.run(command, check=True)
+        info = wav_info(prepared_wav)
+
+    info["path"] = str(path)
+    info["source_format"] = path.suffix.lower().lstrip(".") or "unknown"
+    info["normalized_for_analysis"] = True
+    info["ffmpeg"] = {"path": ffmpeg_path, "source": ffmpeg_source}
+    info["loop"] = None
+    return info
+
+
 def wav_peaks(path: Path, buckets: int = 512) -> list[float]:
     with wave.open(str(path), "rb") as wav:
         frame_count = wav.getnframes()
@@ -663,7 +782,7 @@ def resolve_loop_points(args: argparse.Namespace, wav_path: Path) -> tuple[int |
     if args.loop_start is not None or args.loop_end is not None:
         if args.loop_start is None or args.loop_end is None:
             raise ValueError("Both --loop-start and --loop-end are required")
-        sample_count = wav_sample_count(wav_path)
+        sample_count = int(audio_info(wav_path).get("sample_count") or 0)
         if args.loop_start < 0 or args.loop_end <= args.loop_start or args.loop_end > sample_count:
             raise ValueError(f"Invalid loop range {args.loop_start}..{args.loop_end} for {sample_count} samples")
         return args.loop_start, args.loop_end, "explicit"
@@ -671,7 +790,7 @@ def resolve_loop_points(args: argparse.Namespace, wav_path: Path) -> tuple[int |
     if getattr(args, "loop_mode", "auto") == "auto":
         loop = wav_smpl_loop(wav_path)
         if loop is not None:
-            sample_count = wav_sample_count(wav_path)
+            sample_count = int(audio_info(wav_path).get("sample_count") or 0)
             if loop[0] < 0 or loop[1] <= loop[0] or loop[1] > sample_count:
                 raise ValueError(f"Invalid WAV smpl loop range {loop[0]}..{loop[1]} for {sample_count} samples")
             return loop[0], loop[1], "wav-smpl"
@@ -1084,6 +1203,7 @@ def build_replace_checks(
     hca_report: dict[str, Any],
     loop_start: int | None,
     loop_end: int | None,
+    loop_source: str,
 ) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
     original = original_hca.get("Hca") or {}
@@ -1114,6 +1234,12 @@ def build_replace_checks(
         "loop_end": loop_end,
         "prepared_samples": prepared_info.get("sample_count"),
     })
+    if loop_source == "disabled-hca-loop-preserve-duration":
+        checks.append({
+            "name": "hca_loop",
+            "status": "warning",
+            "reason": "HCA loop metadata was not written because the current encoder trims the file to LoopEnd.",
+        })
     original_samples = int(original.get("SampleCount") or 0)
     effective_samples = int(hca_report.get("hcaSampleCount") or prepared_info.get("sample_count") or 0) if isinstance(hca_report, dict) else int(prepared_info.get("sample_count") or 0)
     duration_ratio = effective_samples / original_samples if original_samples > 0 else None
@@ -1145,9 +1271,12 @@ def build_replace_checks(
     })
     new_version = hca_report.get("hcaVersion") if isinstance(hca_report, dict) else None
     if new_version is not None:
+        original_version = int(original_hca.get("Version") or 0)
+        encoded_version = int(new_version or 0)
+        status = "ok" if original_version == encoded_version else "warning"
         checks.append({
             "name": "hca_version",
-            "status": "warning" if int(original_hca.get("Version") or 0) != int(new_version or 0) else "ok",
+            "status": status,
             "original_version": original_hca.get("Version"),
             "new_version": new_version,
         })
@@ -1167,6 +1296,10 @@ def cmd_inspect(args: argparse.Namespace) -> None:
 
     if data.startswith(AWB_MAGIC):
         metadata = awb_metadata(parse_awb(data))
+        if args.acb:
+            clip_names = acb_awb_clip_names(read_cri(Path(args.acb)))
+            for entry in metadata["entries"]:
+                entry["name"] = clip_names.get(entry["id"], "")
         if output:
             write_json(output / f"{source.name}.metadata.json", metadata)
         print(json.dumps(metadata, ensure_ascii=False, indent=2))
@@ -1190,7 +1323,7 @@ def cmd_inspect(args: argparse.Namespace) -> None:
 
 def cmd_wav_info(args: argparse.Namespace) -> None:
     source = Path(args.source)
-    print(json.dumps(wav_info(source), ensure_ascii=False, indent=2))
+    print(json.dumps(audio_info(source), ensure_ascii=False, indent=2))
 
 
 def cmd_ensure_plugins(args: argparse.Namespace) -> None:
@@ -1429,7 +1562,7 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
         input_loop_source = "none"
         try:
             input_loop_start, input_loop_end, input_loop_source = resolve_loop_points(args, wav_path)
-            input_info = wav_info(wav_path)
+            input_info = audio_info(wav_path)
         except Exception:
             input_info = {"path": str(wav_path), "loop": None}
             if args.loop_start is not None or args.loop_end is not None:
@@ -1462,7 +1595,12 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
             command.extend(["--bitrate", str(bitrate)])
         if args.key:
             command.extend(["--key", args.key])
-        if loop_start is not None and loop_end is not None:
+        if args.codec == "HCA" and loop_start is not None and loop_end is not None:
+            loop_start = None
+            loop_end = None
+            loop_source = "disabled-hca-loop-preserve-duration"
+            command.append("--no-loop")
+        elif loop_start is not None and loop_end is not None:
             command.extend(["--loop-start", str(loop_start), "--loop-end", str(loop_end)])
         else:
             command.append("--no-loop")
@@ -1477,7 +1615,14 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
             encode_report = {"raw_stdout": encode_result.stdout}
 
         normalized_hca_ciph = False
+        matched_hca_profile = False
         encoded_hca = inspect_hca_with_helper(hca_path, helper_project) if args.codec == "HCA" else {}
+        if args.codec == "HCA" and args.match_original_hca_profile:
+            matched_hca_profile = match_hca_header_profile(hca_path, original_hca)
+            if matched_hca_profile:
+                encoded_hca = inspect_hca_with_helper(hca_path, helper_project)
+                if isinstance(encode_report, dict):
+                    encode_report["matchedOriginalHcaProfile"] = True
         if args.codec == "HCA":
             original_encryption = int(original_hca_body.get("EncryptionType") or 0)
             encoded_encryption = int((encoded_hca.get("Hca") or {}).get("EncryptionType") or 0)
@@ -1491,6 +1636,7 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
             if isinstance(encode_report, dict):
                 encode_report["hcaVersion"] = encoded_hca.get("Version")
                 encode_report["hcaEncryptionType"] = (encoded_hca.get("Hca") or {}).get("EncryptionType")
+                encode_report["minResolution"] = (encoded_hca.get("Hca") or {}).get("MinResolution")
 
         if args.keep_hca:
             keep_path = target.with_suffix(target.suffix + ".replacement.hca")
@@ -1530,9 +1676,10 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
             "loop_start": loop_start,
             "loop_end": loop_end,
             "normalized_hca_ciph": normalized_hca_ciph,
-            "effective_sample_count": hca_report.get("hcaSampleCount") or (loop_end if loop_end is not None else prepared_info.get("sample_count")),
+            "matched_hca_profile": matched_hca_profile,
+            "effective_sample_count": hca_report.get("hcaSampleCount") or prepared_info.get("sample_count"),
             "bitrate": bitrate,
-            "checks": build_replace_checks(original_entry, original_hca, input_info, prepared_info, hca_report, loop_start, loop_end),
+            "checks": build_replace_checks(original_entry, original_hca, input_info, prepared_info, hca_report, loop_start, loop_end, loop_source),
             "hca": encode_report,
         })
 
@@ -1548,7 +1695,7 @@ def cmd_patch_acb_waveform(args: argparse.Namespace) -> None:
         raise ValueError("Both --loop-start and --loop-end are required")
     if loop_start is not None and (loop_start < 0 or loop_end <= loop_start or loop_end > sample_count):
         raise ValueError(f"Invalid loop range {loop_start}..{loop_end} for {sample_count} samples")
-    effective_sample_count = loop_end if loop_start is not None and loop_end is not None else sample_count
+    effective_sample_count = sample_count
     if sample_count <= 0:
         raise ValueError("Sample count must be positive")
     if effective_sample_count <= 0:
@@ -1754,6 +1901,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     inspect_parser = subparsers.add_parser("inspect", help="Inspect ACB/AWB metadata.")
     inspect_parser.add_argument("source")
+    inspect_parser.add_argument("--acb", help="Optional ACB used to resolve AWB clip/cue names.")
     inspect_parser.add_argument("--output")
     inspect_parser.add_argument("--summary", action="store_true", help="Omit full ACB row dumps from JSON.")
     inspect_parser.set_defaults(func=cmd_inspect)
@@ -1809,6 +1957,7 @@ def build_parser() -> argparse.ArgumentParser:
     replace_wav_parser.add_argument("--no-ffmpeg-download", action="store_true", help="Fail instead of downloading bundled FFmpeg when no local FFmpeg is found.")
     replace_wav_parser.add_argument("--hca-tool", help="Path to CriHcaTool.csproj.")
     replace_wav_parser.add_argument("--keep-hca", action="store_true", help="Keep the encoded HCA next to the target AWB.")
+    replace_wav_parser.add_argument("--match-original-hca-profile", action="store_true", help="Patch generated HCA version/min-resolution to match the replaced entry. Off by default for compatibility.")
     replace_wav_parser.set_defaults(func=cmd_replace_awb_wav)
 
     patch_acb_parser = subparsers.add_parser(

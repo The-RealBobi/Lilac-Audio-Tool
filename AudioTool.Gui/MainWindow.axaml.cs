@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -12,6 +14,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 
@@ -19,7 +22,9 @@ namespace Level5.AudioTool.Gui;
 
 public sealed partial class MainWindow : Window
 {
+    private static string AppVersion => $"v{typeof(MainWindow).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0"}";
     private readonly ObservableCollection<AwbEntryViewModel> _awbEntries = new();
+    private readonly ObservableCollection<ReplacementQueueItem> _replacementQueue = new();
     private readonly string _audioRoot;
     private readonly string _dataRoot;
     private readonly string _preferencesPath;
@@ -35,21 +40,25 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer _playbackTimer;
     private TimeSpan _playbackOffset;
     private DateTime _playbackStartedAt;
-    private bool _playbackPaused;
     private TimelineDragMode _timelineDragMode = TimelineDragMode.None;
 
     public MainWindow()
     {
         InitializeComponent();
+        ApplyLocalization();
         _playbackTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _playbackTimer.Tick += OnPlaybackTimerTick;
         _audioRoot = ResolveAudioRoot();
         _dataRoot = ResolveDataRoot();
         _preferencesPath = Path.Combine(_dataRoot, "config", "user_preferences.json");
         AwbEntriesGrid.ItemsSource = _awbEntries;
+        ReplacementQueueGrid.ItemsSource = _replacementQueue;
         OutputDirectoryTextBox.Text = Path.Combine(_dataRoot, "work");
         KeepHcaCheckBox.IsCheckedChanged += OnPreferenceChanged;
-        PatchWaveformCheckBox.IsCheckedChanged += OnPreferenceChanged;
+        KeepReportsCheckBox.IsCheckedChanged += OnPreferenceChanged;
+        UseModSuffixCheckBox.IsCheckedChanged += OnPreferenceChanged;
+        AddHandler(DragDrop.DragOverEvent, OnDragOver);
+        AddHandler(DragDrop.DropEvent, OnDrop);
         LoadPreferences();
         SetLoopEnabled(false);
         _uiReady = true;
@@ -61,12 +70,74 @@ public sealed partial class MainWindow : Window
         _ = EnsurePluginsAsync();
     }
 
+    private void ApplyLocalization()
+    {
+        var strings = UiText.Current;
+        Title = $"L5 Audio Tool {AppVersion}";
+        VersionTextBlock.Text = AppVersion;
+        SubtitleTextBlock.Text = strings.Subtitle;
+        FilesHeaderTextBlock.Text = strings.Files;
+        BankLabelTextBlock.Text = strings.Bank;
+        BrowseBankButton.Content = strings.Browse;
+        ChangesHeaderTextBlock.Text = strings.Changes;
+        InspectAwbButton.Content = strings.ReadEntries;
+        PreviewEntryButton.Content = strings.PlayEntry;
+        SubstituteButton.Content = strings.Replace;
+        RemoveReplacementButton.Content = strings.Remove;
+        ClearReplacementsButton.Content = strings.Clear;
+        LoopHeaderTextBlock.Text = strings.Loop;
+        UseWavLoopButton.Content = strings.UseSmpl;
+        KeepHcaCheckBox.Content = strings.KeepHca;
+        KeepReportsCheckBox.Content = strings.KeepReports;
+        UseModSuffixCheckBox.Content = strings.UseModSuffix;
+        ExecuteButton.Content = strings.Export;
+        EntriesHeaderTextBlock.Text = strings.Entries;
+        OperationHeaderTextBlock.Text = strings.Operation;
+        AcbPathTextBox.Watermark = strings.AcbWatermark;
+        AwbPathTextBox.Watermark = strings.AwbWatermark;
+        ReplacementQueueGrid.Columns[0].Header = strings.Mode;
+        ReplacementQueueGrid.Columns[1].Header = strings.Entry;
+        ReplacementQueueGrid.Columns[2].Header = strings.Audio;
+        AwbEntriesGrid.Columns[0].Header = strings.Index;
+        AwbEntriesGrid.Columns[1].Header = strings.Id;
+        AwbEntriesGrid.Columns[2].Header = strings.Type;
+        AwbEntriesGrid.Columns[3].Header = strings.Size;
+        AwbEntriesGrid.Columns[4].Header = strings.Clip;
+
+        if (SelectorModeComboBox.Items[1] is ComboBoxItem indexItem)
+        {
+            indexItem.Content = strings.Index;
+        }
+        if (LoopModeComboBox.Items[0] is ComboBoxItem autoItem)
+        {
+            autoItem.Content = strings.AutoWavSmpl;
+        }
+        if (LoopModeComboBox.Items[1] is ComboBoxItem manualItem)
+        {
+            manualItem.Content = strings.Manual;
+        }
+        if (LoopModeComboBox.Items[2] is ComboBoxItem noLoopItem)
+        {
+            noLoopItem.Content = strings.NoLoop;
+        }
+    }
+
+    private async void OnBrowseBankClick(object? sender, RoutedEventArgs e)
+    {
+        var path = await PickFileAsync("Seleccionar ACB/AWB", [new FilePickerFileType("CRI ACB/AWB") { Patterns = ["*.acb", "*.awb"] }]);
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            await LoadBankPairAsync(path);
+        }
+    }
+
     private async void OnBrowseAcbClick(object? sender, RoutedEventArgs e)
     {
         var path = await PickFileAsync("Seleccionar ACB", [new FilePickerFileType("CRI ACB") { Patterns = ["*.acb"] }]);
         if (!string.IsNullOrWhiteSpace(path))
         {
             AcbPathTextBox.Text = path;
+            await TryLoadSiblingBankAsync(path);
             SavePreferences();
             UpdateCommandPreview();
         }
@@ -108,6 +179,7 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(path))
         {
             AwbPathTextBox.Text = path;
+            await TryLoadSiblingBankAsync(path);
             SavePreferences();
             UpdateCommandPreview();
         }
@@ -149,6 +221,11 @@ public sealed partial class MainWindow : Window
 
     private async void OnInspectAwbClick(object? sender, RoutedEventArgs e)
     {
+        await InspectAwbAsync();
+    }
+
+    private async Task InspectAwbAsync()
+    {
         if (string.IsNullOrWhiteSpace(AwbPathTextBox.Text))
         {
             AppendLog("Selecciona un AWB antes de inspeccionar.");
@@ -157,7 +234,14 @@ public sealed partial class MainWindow : Window
 
         await RunBusyAsync(async () =>
         {
-            var result = await RunPythonAsync(["inspect", AwbPathTextBox.Text!]);
+            var inspectArgs = new List<string> { "inspect", AwbPathTextBox.Text! };
+            if (!string.IsNullOrWhiteSpace(AcbPathTextBox.Text) && File.Exists(AcbPathTextBox.Text))
+            {
+                inspectArgs.Add("--acb");
+                inspectArgs.Add(AcbPathTextBox.Text!);
+            }
+
+            var result = await RunPythonAsync(inspectArgs);
             if (result.ExitCode != 0)
             {
                 AppendLog(result.CombinedOutput);
@@ -168,7 +252,7 @@ public sealed partial class MainWindow : Window
             _awbEntries.Clear();
             foreach (var entry in metadata?.Entries ?? [])
             {
-                _awbEntries.Add(new AwbEntryViewModel(entry.Index, entry.Id, entry.Extension ?? "", entry.Size, entry.Sha1 ?? ""));
+                _awbEntries.Add(new AwbEntryViewModel(entry.Index, entry.Id, entry.Extension ?? "", entry.Size, entry.Name ?? ""));
             }
 
             AppendLog($"AWB inspeccionado: {_awbEntries.Count} entradas.");
@@ -212,9 +296,7 @@ public sealed partial class MainWindow : Window
 
             var decoder = string.IsNullOrWhiteSpace(preview.Decoder) ? "desconocido" : preview.Decoder;
             AppendLog($"Previsualización ({decoder}): {preview.Wav}");
-            await LoadWavInfoAsync(preview.Wav);
-            SetPlayerSource(preview.Wav);
-            StartPlayback();
+            OpenWithSystemPlayer(preview.Wav);
         });
     }
 
@@ -222,7 +304,7 @@ public sealed partial class MainWindow : Window
     {
         if (_playbackProcess is not null && !_playbackProcess.HasExited)
         {
-            TogglePlaybackPause();
+            StopPlayback();
             return;
         }
 
@@ -230,7 +312,7 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
         {
             var wavPath = WavPathTextBox.Text?.Trim();
-            if (!string.IsNullOrWhiteSpace(wavPath) && File.Exists(wavPath) && _wavSamples > 0)
+            if (!string.IsNullOrWhiteSpace(wavPath) && File.Exists(wavPath))
             {
                 source = wavPath;
                 SetPlayerSource(source);
@@ -239,7 +321,7 @@ public sealed partial class MainWindow : Window
 
         if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
         {
-            AppendLog("No hay un WAV cargado para reproducir. Usa un WAV de reemplazo o previsualiza una entrada AWB.");
+            AppendLog("Selecciona un audio en la cola de cambios para reproducirlo, o usa Reproducir entrada para escuchar el AWB.");
             return;
         }
 
@@ -248,18 +330,42 @@ public sealed partial class MainWindow : Window
 
     private async void OnExecuteClick(object? sender, RoutedEventArgs e)
     {
-        if (!ValidateInputs(out var acbPath, out var awbPath, out var wavPath, out var outputDirectory))
+        var outputDirectory = await PickOutputDirectoryAsync();
+        if (string.IsNullOrWhiteSpace(outputDirectory))
         {
             return;
         }
 
+        OutputDirectoryTextBox.Text = outputDirectory;
+        SavePreferences();
+
+        if (!ValidateInputs(out var acbPath, out var awbPath, out var wavPath, out _))
+        {
+            return;
+        }
+
+        var jobs = BuildReplacementJobs(wavPath);
+        if (jobs.Count == 0)
+        {
+            AppendLog("Añade al menos un audio de reemplazo.");
+            return;
+        }
+
         var stem = Path.GetFileNameWithoutExtension(awbPath);
-        var targetAwb = Path.Combine(outputDirectory, $"{stem}.mod.awb");
-        var targetAcb = Path.Combine(outputDirectory, $"{Path.GetFileNameWithoutExtension(acbPath)}.mod.acb");
-        var selectorMode = SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index";
-        var selectorValue = ((int)(EntryNumberBox.Value ?? 0)).ToString();
-        var patchAwbId = 0;
-        if (PatchWaveformCheckBox.IsChecked == true && !TryResolvePatchAwbId(out patchAwbId))
+        var targetAwb = BuildExportPath(outputDirectory, awbPath, ".awb");
+        var targetAcb = BuildExportPath(outputDirectory, acbPath, ".acb");
+        if (IsSamePath(targetAcb, acbPath) || IsSamePath(targetAwb, awbPath))
+        {
+            AppendLog(UiText.Current.OutputMatchesSource);
+            return;
+        }
+
+        if (!await PrepareOverwriteAsync(targetAcb, targetAwb))
+        {
+            return;
+        }
+
+        if (jobs.Any(job => !TryResolvePatchAwbId(job, out _)))
         {
             return;
         }
@@ -267,41 +373,67 @@ public sealed partial class MainWindow : Window
         await RunBusyAsync(async () =>
         {
             Directory.CreateDirectory(outputDirectory);
+            var currentAwb = awbPath;
+            var currentAcb = acbPath;
+            var intermediateFiles = new List<string>();
 
-            var replaceArgs = new List<string>
+            for (var i = 0; i < jobs.Count; i++)
             {
-                "replace-awb-wav",
-                awbPath,
-                targetAwb,
-                wavPath,
-                selectorMode,
-                selectorValue
-            };
+                var job = jobs[i];
+                var isLast = i == jobs.Count - 1;
+                var nextAwb = isLast ? targetAwb : Path.Combine(outputDirectory, $"{stem}.batch-{i + 1}.awb");
+                var nextAcb = isLast ? targetAcb : Path.Combine(outputDirectory, $"{Path.GetFileNameWithoutExtension(acbPath)}.batch-{i + 1}.acb");
+                if (!isLast)
+                {
+                    intermediateFiles.Add(nextAwb);
+                    intermediateFiles.Add(nextAcb);
+                    intermediateFiles.Add($"{nextAwb}.wav-replace-report.json");
+                    intermediateFiles.Add($"{nextAwb}.replace-report.json");
+                    intermediateFiles.Add($"{nextAcb}.patch-report.json");
+                    intermediateFiles.Add($"{nextAcb}.stream-awb-report.json");
+                }
 
-            AddLoopArgs(replaceArgs);
-            if (KeepHcaCheckBox.IsChecked == true)
-            {
-                replaceArgs.Add("--keep-hca");
-            }
+                var replaceArgs = new List<string>
+                {
+                    "replace-awb-wav",
+                    currentAwb,
+                    nextAwb,
+                    job.AudioPath,
+                    job.SelectorMode,
+                    job.Entry.ToString()
+                };
 
-            AppendLog("Generando AWB modificado...");
-            var replaceResult = await RunPythonAsync(replaceArgs);
-            AppendLog(replaceResult.CombinedOutput);
-            if (replaceResult.ExitCode != 0)
-            {
-                return;
-            }
+                AddLoopArgs(replaceArgs, job);
+                if (KeepHcaCheckBox.IsChecked == true)
+                {
+                    replaceArgs.Add("--keep-hca");
+                }
 
-            var replaceReport = LoadReplaceReport(targetAwb);
-            LogReplaceWarnings(replaceReport);
+                AppendLog($"Generando AWB modificado ({i + 1}/{jobs.Count}): {job.Label}");
+                var replaceResult = await RunPythonAsync(replaceArgs);
+                AppendLog(replaceResult.CombinedOutput);
+                if (replaceResult.ExitCode != 0)
+                {
+                    return;
+                }
 
-            if (PatchWaveformCheckBox.IsChecked == true)
-            {
+                var replaceReport = LoadReplaceReport(nextAwb);
+                LogReplaceWarnings(replaceReport);
+                if (HasReplaceErrors(replaceReport))
+                {
+                    return;
+                }
+
+                if (!TryResolvePatchAwbId(job, out var patchAwbId))
+                {
+                    return;
+                }
+
                 var patchArgs = new List<string>
                 {
                     "patch-acb-waveform",
-                    acbPath,
-                    targetAcb,
+                    currentAcb,
+                    nextAcb,
                     "--id",
                     patchAwbId.ToString(),
                     "--samples",
@@ -331,18 +463,16 @@ public sealed partial class MainWindow : Window
                 {
                     patchArgs.Add("--no-loop");
                 }
-                AppendLog("Parcheando WaveformTable del ACB...");
+                AppendLog($"Parcheando WaveformTable del ACB ({i + 1}/{jobs.Count})...");
                 var patchResult = await RunPythonAsync(patchArgs);
                 AppendLog(patchResult.CombinedOutput);
                 if (patchResult.ExitCode != 0)
                 {
                     return;
                 }
-            }
-            else
-            {
-                File.Copy(acbPath, targetAcb, overwrite: true);
-                AppendLog("ACB conservado; sólo se actualizará su vínculo con el AWB.");
+
+                currentAcb = nextAcb;
+                currentAwb = nextAwb;
             }
 
             var streamPatchArgs = new List<string>
@@ -361,6 +491,11 @@ public sealed partial class MainWindow : Window
             AppendLog(streamPatchResult.CombinedOutput);
             if (streamPatchResult.ExitCode == 0)
             {
+                DeleteIntermediateFiles(intermediateFiles);
+                if (KeepReportsCheckBox.IsChecked != true)
+                {
+                    DeleteExportReports(targetAcb, targetAwb);
+                }
                 AppendLog($"Listo: {targetAcb}");
                 AppendLog($"Listo: {targetAwb}");
             }
@@ -405,6 +540,137 @@ public sealed partial class MainWindow : Window
 
         SavePreferences();
         UpdateCommandPreview();
+    }
+
+    private void OnAwbEntrySelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!_uiReady || AwbEntriesGrid.SelectedItem is not AwbEntryViewModel entry)
+        {
+            return;
+        }
+
+        SelectorModeComboBox.SelectedIndex = 0;
+        EntryNumberBox.Value = entry.Id;
+        SavePreferences();
+        UpdateCommandPreview();
+    }
+
+    private async void OnSubstituteClick(object? sender, RoutedEventArgs e)
+    {
+        var path = await PickFileAsync("Seleccionar audio de reemplazo", [new FilePickerFileType("Audio") { Patterns = ["*.wav", "*.flac", "*.ogg", "*.mp3", "*.m4a", "*.aac", "*.aiff", "*.aif"] }]);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        WavPathTextBox.Text = path;
+        await LoadWavInfoAsync(path);
+        SetPlayerSource(path);
+
+        AddReplacementToQueue(path, (int)(EntryNumberBox.Value ?? 0));
+        SavePreferences();
+    }
+
+    private void OnAddReplacementClick(object? sender, RoutedEventArgs e)
+    {
+        var audioPath = WavPathTextBox.Text?.Trim() ?? "";
+        if (!File.Exists(audioPath))
+        {
+            AppendLog("Selecciona un audio de reemplazo antes de añadirlo a la cola.");
+            return;
+        }
+
+        AddReplacementToQueue(audioPath, (int)(EntryNumberBox.Value ?? 0));
+    }
+
+    private void OnRemoveReplacementClick(object? sender, RoutedEventArgs e)
+    {
+        if (ReplacementQueueGrid.SelectedItem is ReplacementQueueItem item)
+        {
+            _replacementQueue.Remove(item);
+            UpdateCommandPreview();
+        }
+    }
+
+    private void OnClearReplacementsClick(object? sender, RoutedEventArgs e)
+    {
+        _replacementQueue.Clear();
+        UpdateCommandPreview();
+    }
+
+    private async void OnReplacementSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!_uiReady || ReplacementQueueGrid.SelectedItem is not ReplacementQueueItem item)
+        {
+            return;
+        }
+
+        if (!File.Exists(item.AudioPath))
+        {
+            AppendLog(UiText.Current.AudioMissing(item.AudioPath));
+            return;
+        }
+
+        WavPathTextBox.Text = item.AudioPath;
+        await LoadWavInfoAsync(item.AudioPath);
+        SetPlayerSource(item.AudioPath);
+        SavePreferences();
+    }
+
+    private void OnDragOver(object? sender, DragEventArgs e)
+    {
+        e.DragEffects = e.Data.Contains(DataFormats.Files) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private async void OnDrop(object? sender, DragEventArgs e)
+    {
+        var files = e.Data.GetFiles()?
+            .Select(item => item.TryGetLocalPath())
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Cast<string>()
+            .ToList() ?? [];
+        if (files.Count == 0)
+        {
+            return;
+        }
+
+        var audioOffset = 0;
+        foreach (var path in files)
+        {
+            var extension = Path.GetExtension(path).ToLowerInvariant();
+            if (extension == ".acb")
+            {
+                await LoadBankPairAsync(path);
+                continue;
+            }
+
+            if (extension == ".awb")
+            {
+                await LoadBankPairAsync(path);
+                continue;
+            }
+
+            if (!IsSupportedAudio(path))
+            {
+                continue;
+            }
+
+            WavPathTextBox.Text = path;
+            AddReplacementToQueue(path, GuessEntryFromFileName(path) ?? (int)(EntryNumberBox.Value ?? 0) + audioOffset);
+            audioOffset++;
+        }
+
+        var selectedAudio = WavPathTextBox.Text?.Trim();
+        if (!string.IsNullOrWhiteSpace(selectedAudio) && File.Exists(selectedAudio))
+        {
+            await LoadWavInfoAsync(selectedAudio);
+            SetPlayerSource(selectedAudio);
+        }
+
+        SavePreferences();
+        UpdateCommandPreview();
+        e.Handled = true;
     }
 
     private void OnUseWavLoopClick(object? sender, RoutedEventArgs e)
@@ -515,7 +781,6 @@ public sealed partial class MainWindow : Window
         if (result.ExitCode != 0)
         {
             StopPlayback();
-            _playerSourcePath = null;
             _wavSamples = 0;
             _wavSampleRate = 0;
             _wavLoopStart = null;
@@ -524,7 +789,7 @@ public sealed partial class MainWindow : Window
             LoopModeComboBox.SelectedIndex = 2;
             SetLoopEnabled(false);
             UpdateLoopVisuals();
-            AppendLog("El archivo no expone metadata WAV directa. Se normalizará con FFmpeg al generar.");
+            AppendLog("El archivo no expone metadata directa de loop/duración. Se normalizará con FFmpeg al generar.");
             return;
         }
 
@@ -545,7 +810,7 @@ public sealed partial class MainWindow : Window
         LoopModeComboBox.SelectedIndex = _wavLoopStart is null ? 2 : 0;
         SetLoopEnabled(_wavLoopStart is not null);
         UpdateLoopVisuals();
-        AppendLog($"WAV: {_wavSamples} samples, {_wavSampleRate} Hz, loop: {DescribeLoop()}.");
+        AppendLog($"Audio: {_wavSamples} samples, {_wavSampleRate} Hz, loop: {DescribeLoop()}.");
     }
 
     private static ReplaceReport LoadReplaceReport(string targetAwb)
@@ -565,13 +830,20 @@ public sealed partial class MainWindow : Window
     {
         foreach (var check in report.Checks ?? [])
         {
-            if (!string.Equals(check.Status, "warning", StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(check.Status, "warning", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(check.Status, "error", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            AppendLog($"Aviso: {check.Name} - {check.Describe()}");
+            var prefix = string.Equals(check.Status, "error", StringComparison.OrdinalIgnoreCase) ? "Error" : "Aviso";
+            AppendLog($"{prefix}: {check.Name} - {check.Describe()}");
         }
+    }
+
+    private bool HasReplaceErrors(ReplaceReport report)
+    {
+        return report.Checks?.Any(check => string.Equals(check.Status, "error", StringComparison.OrdinalIgnoreCase)) == true;
     }
 
     private void ApplyWavLoop()
@@ -589,20 +861,189 @@ public sealed partial class MainWindow : Window
         UpdateLoopVisuals();
     }
 
-    private void AddLoopArgs(List<string> args)
+    private (int Mode, int Start, int End) CurrentLoopSnapshot()
     {
-        if (LoopModeComboBox.SelectedIndex == 2)
+        var mode = LoopModeComboBox.SelectedIndex;
+        if (mode < 0)
+        {
+            mode = 0;
+        }
+
+        return (Math.Min(mode, 2), (int)(LoopStartBox.Value ?? 0), (int)(LoopEndBox.Value ?? 0));
+    }
+
+    private void AddLoopArgs(List<string> args, ReplacementJob job)
+    {
+        if (job.LoopMode == 2)
         {
             args.Add("--no-loop");
             return;
         }
 
-        if (LoopModeComboBox.SelectedIndex == 1)
+        if (job.LoopMode == 1)
         {
             args.Add("--loop-start");
-            args.Add(((int)(LoopStartBox.Value ?? 0)).ToString());
+            args.Add(job.LoopStart.ToString());
             args.Add("--loop-end");
-            args.Add(((int)(LoopEndBox.Value ?? 0)).ToString());
+            args.Add(job.LoopEnd.ToString());
+        }
+    }
+
+    private List<ReplacementJob> BuildReplacementJobs(string singleAudioPath)
+    {
+        if (_replacementQueue.Count == 0)
+        {
+            var loop = CurrentLoopSnapshot();
+            return
+            [
+                new ReplacementJob(
+                    SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index",
+                    (int)(EntryNumberBox.Value ?? 0),
+                    singleAudioPath,
+                    loop.Mode,
+                    loop.Start,
+                    loop.End)
+            ];
+        }
+
+        return _replacementQueue
+            .Where(item => File.Exists(item.AudioPath))
+            .Select(item => new ReplacementJob(item.SelectorMode, item.Entry, item.AudioPath, item.LoopMode, item.LoopStart, item.LoopEnd))
+            .ToList();
+    }
+
+    private void AddReplacementToQueue(string audioPath, int entry)
+    {
+        var selectorMode = SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index";
+        var loop = CurrentLoopSnapshot();
+        _replacementQueue.Add(new ReplacementQueueItem(selectorMode, Math.Max(0, entry), audioPath, loop.Mode, loop.Start, loop.End));
+        AppendLog($"Cola: {Path.GetFileName(audioPath)} -> {(selectorMode == "--id" ? "ID" : "índice")} {Math.Max(0, entry)}");
+        UpdateCommandPreview();
+    }
+
+    private static int? GuessEntryFromFileName(string path)
+    {
+        var fileName = Path.GetFileNameWithoutExtension(path);
+        var digits = new string(fileName.TakeWhile(char.IsDigit).ToArray());
+        return int.TryParse(digits, out var value) ? value : null;
+    }
+
+    private static bool IsSupportedAudio(string path)
+    {
+        return Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".wav" or ".flac" or ".ogg" or ".mp3" or ".m4a" or ".aac" or ".aiff" or ".aif" => true,
+            _ => false
+        };
+    }
+
+    private string BuildExportPath(string outputDirectory, string sourcePath, string extension)
+    {
+        var suffix = UseModSuffixCheckBox.IsChecked == true ? ".mod" : "";
+        return Path.Combine(outputDirectory, $"{Path.GetFileNameWithoutExtension(sourcePath)}{suffix}{extension}");
+    }
+
+    private async Task<bool> PrepareOverwriteAsync(params string[] paths)
+    {
+        var existing = paths.Where(File.Exists).ToList();
+        if (existing.Count == 0)
+        {
+            return true;
+        }
+
+        if (!await ConfirmOverwriteAsync(existing))
+        {
+            AppendLog(UiText.Current.OverwriteCancelled);
+            return false;
+        }
+
+        foreach (var path in existing)
+        {
+            File.Delete(path);
+            DeleteExportReportsFor(path);
+        }
+
+        return true;
+    }
+
+    private async Task<bool> ConfirmOverwriteAsync(IReadOnlyCollection<string> existingPaths)
+    {
+        var names = string.Join(Environment.NewLine, existingPaths.Select(path => $"- {Path.GetFileName(path)}"));
+        var message = new TextBlock
+        {
+            Text = $"{UiText.Current.OutputExistsPrompt}{Environment.NewLine}{Environment.NewLine}{names}",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            MaxWidth = 520
+        };
+        var overwriteButton = new Button
+        {
+            Content = UiText.Current.Overwrite,
+            MinWidth = 110,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        var cancelButton = new Button
+        {
+            Content = UiText.Current.Cancel,
+            MinWidth = 110,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        var dialog = new Window
+        {
+            Title = UiText.Current.OverwriteTitle,
+            Width = 560,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Avalonia.Thickness(18),
+                Spacing = 18,
+                Children =
+                {
+                    message,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        Spacing = 8,
+                        Children = { cancelButton, overwriteButton }
+                    }
+                }
+            }
+        };
+
+        cancelButton.Click += (_, _) => dialog.Close(false);
+        overwriteButton.Click += (_, _) => dialog.Close(true);
+        return await dialog.ShowDialog<bool>(this);
+    }
+
+    private static bool IsSamePath(string first, string second)
+    {
+        return string.Equals(Path.GetFullPath(first), Path.GetFullPath(second), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    }
+
+    private static void DeleteIntermediateFiles(IEnumerable<string> paths)
+    {
+        foreach (var path in paths)
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    private static void DeleteExportReports(string targetAcb, string targetAwb)
+    {
+        DeleteExportReportsFor(targetAcb);
+        DeleteExportReportsFor(targetAwb);
+    }
+
+    private static void DeleteExportReportsFor(string target)
+    {
+        foreach (var path in Directory.EnumerateFiles(Path.GetDirectoryName(target) ?? ".", $"{Path.GetFileName(target)}.*report.json"))
+        {
+            File.Delete(path);
         }
     }
 
@@ -613,11 +1054,26 @@ public sealed partial class MainWindow : Window
         wavPath = WavPathTextBox.Text?.Trim() ?? "";
         outputDirectory = OutputDirectoryTextBox.Text?.Trim() ?? "";
 
-        foreach (var path in new[] { acbPath, awbPath, wavPath })
+        foreach (var path in new[] { acbPath, awbPath })
         {
             if (!File.Exists(path))
             {
                 AppendLog($"No existe el archivo: {path}");
+                return false;
+            }
+        }
+
+        if (_replacementQueue.Count == 0 && !File.Exists(wavPath))
+        {
+            AppendLog($"No existe el archivo: {wavPath}");
+            return false;
+        }
+
+        foreach (var item in _replacementQueue)
+        {
+            if (!File.Exists(item.AudioPath))
+            {
+                AppendLog($"No existe el archivo en cola: {item.AudioPath}");
                 return false;
             }
         }
@@ -628,7 +1084,7 @@ public sealed partial class MainWindow : Window
             return false;
         }
 
-        if (LoopModeComboBox.SelectedIndex == 1)
+        if (_replacementQueue.Count == 0 && LoopModeComboBox.SelectedIndex == 1)
         {
             var start = (int)(LoopStartBox.Value ?? 0);
             var end = (int)(LoopEndBox.Value ?? 0);
@@ -638,20 +1094,37 @@ public sealed partial class MainWindow : Window
                 return false;
             }
         }
+        else
+        {
+            foreach (var item in _replacementQueue.Where(static item => item.LoopMode == 1))
+            {
+                if (item.LoopStart < 0 || item.LoopEnd <= item.LoopStart)
+                {
+                    AppendLog($"El rango de loop manual no es válido para {(item.SelectorMode == "--id" ? "ID" : "índice")} {item.Entry}.");
+                    return false;
+                }
+            }
+        }
 
         return true;
     }
 
     private bool TryResolvePatchAwbId(out int awbId)
     {
-        var selectedValue = (int)(EntryNumberBox.Value ?? 0);
-        if (SelectorModeComboBox.SelectedIndex == 0)
+        var selectorMode = SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index";
+        var loop = CurrentLoopSnapshot();
+        return TryResolvePatchAwbId(new ReplacementJob(selectorMode, (int)(EntryNumberBox.Value ?? 0), "", loop.Mode, loop.Start, loop.End), out awbId);
+    }
+
+    private bool TryResolvePatchAwbId(ReplacementJob job, out int awbId)
+    {
+        if (job.SelectorMode == "--id")
         {
-            awbId = selectedValue;
+            awbId = job.Entry;
             return true;
         }
 
-        var entry = _awbEntries.FirstOrDefault(item => item.Index == selectedValue);
+        var entry = _awbEntries.FirstOrDefault(item => item.Index == job.Entry);
         if (entry is null)
         {
             awbId = -1;
@@ -691,8 +1164,8 @@ public sealed partial class MainWindow : Window
         LoopTimeline.HasLoop = LoopModeComboBox.SelectedIndex != 2 && _wavSamples > 0 && end > start;
         UpdatePlaybackVisuals();
         LoopSummaryTextBlock.Text = _wavSamples <= 0
-            ? "Carga un WAV para ver duración y loop."
-            : $"WAV: {_wavSamples} samples ({FormatSeconds(_wavSamples)}). Loop: {DescribeLoop()}.";
+            ? "Carga un audio para ver duración y loop."
+            : $"Audio: {_wavSamples} samples ({FormatSeconds(_wavSamples)}). Loop: {DescribeLoop()}.";
     }
 
     private void SetLoopEnabled(bool enabled)
@@ -719,21 +1192,25 @@ public sealed partial class MainWindow : Window
         }
 
         StopPlayback();
-        if (!TryStartControlledPlayback(_playerSourcePath))
+        if (!TryStartControlledPlayback(_playerSourcePath, out var error))
         {
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                AppendLog(error);
+            }
             OpenWithSystemPlayer(_playerSourcePath);
             return;
         }
 
         _playbackOffset = TimeSpan.Zero;
         _playbackStartedAt = DateTime.UtcNow;
-        _playbackPaused = false;
         PlaybackButton.Content = "⏸";
         _playbackTimer.Start();
     }
 
-    private bool TryStartControlledPlayback(string path)
+    private bool TryStartControlledPlayback(string path, out string? error)
     {
+        error = null;
         if (!OperatingSystem.IsMacOS())
         {
             return false;
@@ -742,43 +1219,28 @@ public sealed partial class MainWindow : Window
         var startInfo = new ProcessStartInfo("afplay", [path])
         {
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            RedirectStandardError = true
         };
         _playbackProcess = Process.Start(startInfo);
-        return _playbackProcess is not null;
-    }
-
-    private void TogglePlaybackPause()
-    {
-        if (_playbackProcess is null || _playbackProcess.HasExited)
+        if (_playbackProcess is null)
         {
-            StopPlayback();
-            return;
+            error = "No se pudo iniciar el reproductor integrado.";
+            return false;
         }
 
-        if (!OperatingSystem.IsMacOS())
+        if (_playbackProcess.WaitForExit(120))
         {
-            StopPlayback();
-            return;
+            var stderr = _playbackProcess.StandardError.ReadToEnd().Trim();
+            _playbackProcess.Dispose();
+            _playbackProcess = null;
+            error = string.IsNullOrWhiteSpace(stderr)
+                ? "El reproductor integrado no pudo reproducir ese archivo."
+                : $"El reproductor integrado no pudo reproducir ese archivo: {stderr}";
+            return false;
         }
 
-        if (_playbackPaused)
-        {
-            SendSignal(_playbackProcess.Id, "CONT");
-            _playbackStartedAt = DateTime.UtcNow;
-            _playbackPaused = false;
-            PlaybackButton.Content = "⏸";
-            _playbackTimer.Start();
-        }
-        else
-        {
-            _playbackOffset = CurrentPlaybackPosition();
-            SendSignal(_playbackProcess.Id, "STOP");
-            _playbackPaused = true;
-            PlaybackButton.Content = "▶";
-            _playbackTimer.Stop();
-            UpdatePlaybackVisuals();
-        }
+        return true;
     }
 
     private void StopPlayback()
@@ -805,7 +1267,6 @@ public sealed partial class MainWindow : Window
         }
 
         _playbackOffset = TimeSpan.Zero;
-        _playbackPaused = false;
         if (PlaybackButton is not null)
         {
             PlaybackButton.Content = "▶";
@@ -832,7 +1293,7 @@ public sealed partial class MainWindow : Window
 
     private TimeSpan CurrentPlaybackPosition()
     {
-        return _playbackPaused ? _playbackOffset : _playbackOffset + (DateTime.UtcNow - _playbackStartedAt);
+        return _playbackOffset + (DateTime.UtcNow - _playbackStartedAt);
     }
 
     private TimeSpan AudioDuration()
@@ -853,16 +1314,6 @@ public sealed partial class MainWindow : Window
         var progress = duration <= TimeSpan.Zero ? 0 : CurrentPlaybackPosition().TotalSeconds / duration.TotalSeconds;
         progress = Math.Clamp(progress, 0, 1);
         LoopTimeline.PlayheadSample = _wavSamples <= 0 ? 0 : (int)Math.Round(_wavSamples * progress);
-    }
-
-    private static void SendSignal(int pid, string signal)
-    {
-        using var process = Process.Start(new ProcessStartInfo("kill", [$"-{signal}", pid.ToString()])
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true
-        });
-        process?.WaitForExit();
     }
 
     private string DescribeLoop()
@@ -894,7 +1345,10 @@ public sealed partial class MainWindow : Window
         var patchIdText = SelectorModeComboBox.SelectedIndex == 0
             ? selectorValue
             : _awbEntries.FirstOrDefault(item => item.Index == (int)(EntryNumberBox.Value ?? 0))?.Id.ToString() ?? "?";
-        CommandPreviewTextBlock.Text = $"replace-awb-wav ... {selectorMode} {selectorValue} / patch-acb-waveform ... --id {patchIdText} / patch-acb-stream-awb ...";
+        var count = _replacementQueue.Count == 0 ? 1 : _replacementQueue.Count;
+        CommandPreviewTextBlock.Text = count == 1
+            ? $"replace-awb-wav ... {selectorMode} {selectorValue} / patch-acb-waveform ... --id {patchIdText} / patch-acb-stream-awb ..."
+            : $"{count} reemplazos en el mismo ACB/AWB / patch-acb-stream-awb al terminar ...";
     }
 
     private async Task<string?> PickFileAsync(string title, IReadOnlyList<FilePickerFileType> filters)
@@ -906,6 +1360,77 @@ public sealed partial class MainWindow : Window
             FileTypeFilter = filters
         });
         return files.Count > 0 ? files[0].TryGetLocalPath() : null;
+    }
+
+    private async Task<string?> PickOutputDirectoryAsync()
+    {
+        var start = OutputDirectoryTextBox.Text?.Trim();
+        var options = new FolderPickerOpenOptions
+        {
+            Title = "Seleccionar carpeta de exportación",
+            AllowMultiple = false
+        };
+        if (!string.IsNullOrWhiteSpace(start) && Directory.Exists(start))
+        {
+            var folder = await StorageProvider.TryGetFolderFromPathAsync(start);
+            if (folder is not null)
+            {
+                options.SuggestedStartLocation = folder;
+            }
+        }
+
+        var folders = await StorageProvider.OpenFolderPickerAsync(options);
+        return folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
+    }
+
+    private async Task LoadBankPairAsync(string path)
+    {
+        var extension = Path.GetExtension(path).ToLowerInvariant();
+        if (extension != ".acb" && extension != ".awb")
+        {
+            return;
+        }
+
+        if (extension == ".acb")
+        {
+            AcbPathTextBox.Text = path;
+            AwbPathTextBox.Text = Path.ChangeExtension(path, ".awb");
+        }
+        else
+        {
+            AwbPathTextBox.Text = path;
+            AcbPathTextBox.Text = Path.ChangeExtension(path, ".acb");
+        }
+
+        SavePreferences();
+        UpdateCommandPreview();
+
+        if (File.Exists(AcbPathTextBox.Text) && File.Exists(AwbPathTextBox.Text))
+        {
+            await InspectAwbAsync();
+        }
+        else
+        {
+            AppendLog("No se encontró el par ACB/AWB junto al archivo seleccionado.");
+        }
+    }
+
+    private async Task TryLoadSiblingBankAsync(string path)
+    {
+        var sibling = Path.ChangeExtension(path, Path.GetExtension(path).Equals(".acb", StringComparison.OrdinalIgnoreCase) ? ".awb" : ".acb");
+        if (File.Exists(sibling))
+        {
+            if (sibling.EndsWith(".acb", StringComparison.OrdinalIgnoreCase))
+            {
+                AcbPathTextBox.Text = sibling;
+            }
+            else
+            {
+                AwbPathTextBox.Text = sibling;
+            }
+
+            await InspectAwbAsync();
+        }
     }
 
     private async Task RestoreSelectedAudioAsync()
@@ -971,7 +1496,8 @@ public sealed partial class MainWindow : Window
             LoopStartBox.Value = Math.Max(0, preferences.LoopStart);
             LoopEndBox.Value = Math.Max(0, preferences.LoopEnd);
             KeepHcaCheckBox.IsChecked = preferences.KeepHca;
-            PatchWaveformCheckBox.IsChecked = preferences.PatchWaveform;
+            KeepReportsCheckBox.IsChecked = preferences.KeepReports;
+            UseModSuffixCheckBox.IsChecked = preferences.UseModSuffix;
         }
         catch (Exception ex)
         {
@@ -1004,7 +1530,8 @@ public sealed partial class MainWindow : Window
                 LoopStart = (int)(LoopStartBox.Value ?? 0),
                 LoopEnd = (int)(LoopEndBox.Value ?? 0),
                 KeepHca = KeepHcaCheckBox.IsChecked == true,
-                PatchWaveform = PatchWaveformCheckBox.IsChecked == true
+                KeepReports = KeepReportsCheckBox.IsChecked == true,
+                UseModSuffix = UseModSuffixCheckBox.IsChecked == true
             };
 
             Directory.CreateDirectory(Path.GetDirectoryName(_preferencesPath)!);
@@ -1218,7 +1745,150 @@ public sealed partial class MainWindow : Window
         public string CombinedOutput => string.Join(Environment.NewLine, new[] { Stdout, Stderr }.Where(static value => !string.IsNullOrWhiteSpace(value)));
     }
 
-    private sealed record AwbEntryViewModel(int Index, int Id, string Extension, long Size, string Sha1);
+    private sealed record AwbEntryViewModel(int Index, int Id, string Extension, long Size, string Name);
+
+    private sealed record ReplacementJob(string SelectorMode, int Entry, string AudioPath, int LoopMode, int LoopStart, int LoopEnd)
+    {
+        public string Label => $"{(SelectorMode == "--id" ? "ID" : UiText.Current.Index)} {Entry} <- {Path.GetFileName(AudioPath) ?? AudioPath}";
+    }
+
+    private sealed record ReplacementQueueItem(string SelectorMode, int Entry, string AudioPath, int LoopMode, int LoopStart, int LoopEnd)
+    {
+        public string Mode => SelectorMode == "--id" ? "ID" : UiText.Current.Index;
+        public string AudioName => Path.GetFileName(AudioPath) ?? AudioPath;
+    }
+
+    private sealed class UiText
+    {
+        public static UiText Current => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase)
+            ? Spanish
+            : English;
+
+        private static UiText Spanish { get; } = new()
+        {
+            Subtitle = "Reemplazo de audio ACB/AWB mediante backend Python",
+            Files = "Archivos",
+            Bank = "ACB/AWB",
+            Browse = "Examinar",
+            Changes = "Cambios",
+            ReadEntries = "Leer entradas AWB",
+            PlayEntry = "Reproducir entrada",
+            Replace = "Sustituir",
+            Remove = "Quitar",
+            Clear = "Limpiar",
+            Loop = "Loop",
+            UseSmpl = "Usar smpl",
+            KeepHca = "Conservar HCA generado junto al AWB",
+            KeepReports = "Conservar reports/logs de exportación",
+            UseModSuffix = "Añadir sufijo .mod",
+            Export = "Export",
+            Entries = "Entradas AWB",
+            Operation = "Operación",
+            AcbWatermark = "Banco .acb",
+            AwbWatermark = "Banco .awb",
+            Mode = "Modo",
+            Entry = "Entrada",
+            Audio = "Audio",
+            Index = "Índice",
+            Id = "ID",
+            Type = "Tipo",
+            Size = "Tamaño",
+            Clip = "Clip",
+            AutoWavSmpl = "Auto WAV smpl",
+            Manual = "Manual",
+            NoLoop = "Sin loop",
+            AudioMissingPrefix = "No existe el archivo en cola",
+            OutputExistsPrompt = "Ya existen archivos de salida. ¿Quieres sobrescribirlos?",
+            OverwriteTitle = "Sobreescribir salida",
+            Overwrite = "Sobreescribir",
+            Cancel = "Cancelar",
+            OverwriteCancelled = "Exportación cancelada: la salida ya existe.",
+            OutputMatchesSource = "La salida coincide con el banco original. Elige otra carpeta o activa el sufijo .mod para no sobrescribir la fuente."
+        };
+
+        private static UiText English { get; } = new()
+        {
+            Subtitle = "ACB/AWB audio replacement through the Python backend",
+            Files = "Files",
+            Bank = "ACB/AWB",
+            Browse = "Browse",
+            Changes = "Changes",
+            ReadEntries = "Read AWB entries",
+            PlayEntry = "Play entry",
+            Replace = "Replace",
+            Remove = "Remove",
+            Clear = "Clear",
+            Loop = "Loop",
+            UseSmpl = "Use smpl",
+            KeepHca = "Keep generated HCA next to the AWB",
+            KeepReports = "Keep export reports/logs",
+            UseModSuffix = "Append .mod suffix",
+            Export = "Export",
+            Entries = "AWB Entries",
+            Operation = "Operation",
+            AcbWatermark = ".acb bank",
+            AwbWatermark = ".awb bank",
+            Mode = "Mode",
+            Entry = "Entry",
+            Audio = "Audio",
+            Index = "Index",
+            Id = "ID",
+            Type = "Type",
+            Size = "Size",
+            Clip = "Clip",
+            AutoWavSmpl = "Auto WAV smpl",
+            Manual = "Manual",
+            NoLoop = "No loop",
+            AudioMissingPrefix = "Queued file does not exist",
+            OutputExistsPrompt = "Output files already exist. Do you want to overwrite them?",
+            OverwriteTitle = "Overwrite output",
+            Overwrite = "Overwrite",
+            Cancel = "Cancel",
+            OverwriteCancelled = "Export cancelled: output already exists.",
+            OutputMatchesSource = "The output path matches the original bank. Choose another folder or keep the .mod suffix to avoid overwriting the source."
+        };
+
+        public string Subtitle { get; init; } = "";
+        public string Files { get; init; } = "";
+        public string Bank { get; init; } = "";
+        public string Browse { get; init; } = "";
+        public string Changes { get; init; } = "";
+        public string ReadEntries { get; init; } = "";
+        public string PlayEntry { get; init; } = "";
+        public string Replace { get; init; } = "";
+        public string Remove { get; init; } = "";
+        public string Clear { get; init; } = "";
+        public string Loop { get; init; } = "";
+        public string UseSmpl { get; init; } = "";
+        public string KeepHca { get; init; } = "";
+        public string KeepReports { get; init; } = "";
+        public string UseModSuffix { get; init; } = "";
+        public string Export { get; init; } = "";
+        public string Entries { get; init; } = "";
+        public string Operation { get; init; } = "";
+        public string AcbWatermark { get; init; } = "";
+        public string AwbWatermark { get; init; } = "";
+        public string Mode { get; init; } = "";
+        public string Entry { get; init; } = "";
+        public string Audio { get; init; } = "";
+        public string Index { get; init; } = "";
+        public string Id { get; init; } = "";
+        public string Type { get; init; } = "";
+        public string Size { get; init; } = "";
+        public string Clip { get; init; } = "";
+        public string AutoWavSmpl { get; init; } = "";
+        public string Manual { get; init; } = "";
+        public string NoLoop { get; init; } = "";
+        public string AudioMissingPrefix { get; init; } = "";
+        public string OutputExistsPrompt { get; init; } = "";
+        public string OverwriteTitle { get; init; } = "";
+        public string Overwrite { get; init; } = "";
+        public string Cancel { get; init; } = "";
+        public string OverwriteCancelled { get; init; } = "";
+        public string OutputMatchesSource { get; init; } = "";
+
+        public string AudioMissing(string path) => $"{AudioMissingPrefix}: {path}";
+    }
 
     private sealed class UserPreferences
     {
@@ -1232,7 +1902,8 @@ public sealed partial class MainWindow : Window
         public int LoopStart { get; set; }
         public int LoopEnd { get; set; }
         public bool KeepHca { get; set; } = true;
-        public bool PatchWaveform { get; set; }
+        public bool KeepReports { get; set; }
+        public bool UseModSuffix { get; set; } = true;
     }
 
     private sealed class AwbMetadata
@@ -1246,7 +1917,7 @@ public sealed partial class MainWindow : Window
         public int Id { get; set; }
         public long Size { get; set; }
         public string? Extension { get; set; }
-        public string? Sha1 { get; set; }
+        public string? Name { get; set; }
     }
 
     private sealed class WavInfo

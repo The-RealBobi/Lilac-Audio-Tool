@@ -100,7 +100,8 @@ static int Encode(string[] args)
 
     var configuration = new HcaConfiguration
     {
-        Quality = quality
+        Quality = quality,
+        TrimFile = false
     };
     if (bitrate > 0)
     {

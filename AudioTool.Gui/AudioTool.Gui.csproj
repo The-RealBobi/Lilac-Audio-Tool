@@ -6,7 +6,8 @@
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
     <UseAppHost>true</UseAppHost>
-    <Version>0.1.0</Version>
+    <Version>0.2.11</Version>
+    <ApplicationIcon>Assets/icon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,6 +20,11 @@
       <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
     </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets/icon.png" />
+    <AvaloniaResource Include="Assets/icon.ico" />
   </ItemGroup>
 
   <ItemGroup>
