@@ -136,8 +136,10 @@ public sealed partial class MainWindow : Window
         var path = await PickFileAsync("Seleccionar ACB", [new FilePickerFileType("CRI ACB") { Patterns = ["*.acb"] }]);
         if (!string.IsNullOrWhiteSpace(path))
         {
+            var previousBank = CurrentBankKey();
             AcbPathTextBox.Text = path;
             await TryLoadSiblingBankAsync(path);
+            ClearReplacementQueueIfBankChanged(previousBank);
             SavePreferences();
             UpdateCommandPreview();
         }
@@ -178,8 +180,10 @@ public sealed partial class MainWindow : Window
         var path = await PickFileAsync("Seleccionar AWB", [new FilePickerFileType("CRI AWB") { Patterns = ["*.awb"] }]);
         if (!string.IsNullOrWhiteSpace(path))
         {
+            var previousBank = CurrentBankKey();
             AwbPathTextBox.Text = path;
             await TryLoadSiblingBankAsync(path);
+            ClearReplacementQueueIfBankChanged(previousBank);
             SavePreferences();
             UpdateCommandPreview();
         }
@@ -1391,6 +1395,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        var previousBank = CurrentBankKey();
         if (extension == ".acb")
         {
             AcbPathTextBox.Text = path;
@@ -1402,6 +1407,7 @@ public sealed partial class MainWindow : Window
             AcbPathTextBox.Text = Path.ChangeExtension(path, ".acb");
         }
 
+        ClearReplacementQueueIfBankChanged(previousBank);
         SavePreferences();
         UpdateCommandPreview();
 
@@ -1431,6 +1437,42 @@ public sealed partial class MainWindow : Window
 
             await InspectAwbAsync();
         }
+    }
+
+    private string CurrentBankKey()
+    {
+        var acb = NormalizeBankPath(AcbPathTextBox.Text);
+        var awb = NormalizeBankPath(AwbPathTextBox.Text);
+        return $"{acb}|{awb}";
+    }
+
+    private static string NormalizeBankPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return Path.GetFullPath(path.Trim());
+        }
+        catch
+        {
+            return path.Trim();
+        }
+    }
+
+    private void ClearReplacementQueueIfBankChanged(string previousBank)
+    {
+        if (_replacementQueue.Count == 0 || string.Equals(previousBank, CurrentBankKey(), StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _replacementQueue.Clear();
+        ReplacementQueueGrid.SelectedItem = null;
+        AppendLog(UiText.Current.QueueClearedForBankChange);
     }
 
     private async Task RestoreSelectedAudioAsync()
@@ -1803,6 +1845,7 @@ public sealed partial class MainWindow : Window
             Overwrite = "Sobreescribir",
             Cancel = "Cancelar",
             OverwriteCancelled = "Exportación cancelada: la salida ya existe.",
+            QueueClearedForBankChange = "Cola limpiada al cambiar de banco ACB/AWB.",
             OutputMatchesSource = "La salida coincide con el banco original. Elige otra carpeta o activa el sufijo .mod para no sobrescribir la fuente."
         };
 
@@ -1845,6 +1888,7 @@ public sealed partial class MainWindow : Window
             Overwrite = "Overwrite",
             Cancel = "Cancel",
             OverwriteCancelled = "Export cancelled: output already exists.",
+            QueueClearedForBankChange = "Queue cleared after changing the ACB/AWB bank.",
             OutputMatchesSource = "The output path matches the original bank. Choose another folder or keep the .mod suffix to avoid overwriting the source."
         };
 
@@ -1885,6 +1929,7 @@ public sealed partial class MainWindow : Window
         public string Overwrite { get; init; } = "";
         public string Cancel { get; init; } = "";
         public string OverwriteCancelled { get; init; } = "";
+        public string QueueClearedForBankChange { get; init; } = "";
         public string OutputMatchesSource { get; init; } = "";
 
         public string AudioMissing(string path) => $"{AudioMissingPrefix}: {path}";
