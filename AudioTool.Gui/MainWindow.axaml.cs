@@ -139,7 +139,7 @@ public sealed partial class MainWindow : Window
             var previousBank = CurrentBankKey();
             AcbPathTextBox.Text = path;
             await TryLoadSiblingBankAsync(path);
-            ClearReplacementQueueIfBankChanged(previousBank);
+            ClearBankStateIfChanged(previousBank);
             SavePreferences();
             UpdateCommandPreview();
         }
@@ -183,7 +183,7 @@ public sealed partial class MainWindow : Window
             var previousBank = CurrentBankKey();
             AwbPathTextBox.Text = path;
             await TryLoadSiblingBankAsync(path);
-            ClearReplacementQueueIfBankChanged(previousBank);
+            ClearBankStateIfChanged(previousBank);
             SavePreferences();
             UpdateCommandPreview();
         }
@@ -1407,7 +1407,7 @@ public sealed partial class MainWindow : Window
             AcbPathTextBox.Text = Path.ChangeExtension(path, ".acb");
         }
 
-        ClearReplacementQueueIfBankChanged(previousBank);
+        ClearBankStateIfChanged(previousBank);
         SavePreferences();
         UpdateCommandPreview();
 
@@ -1463,16 +1463,23 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void ClearReplacementQueueIfBankChanged(string previousBank)
+    private void ClearBankStateIfChanged(string previousBank)
     {
-        if (_replacementQueue.Count == 0 || string.Equals(previousBank, CurrentBankKey(), StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(previousBank, CurrentBankKey(), StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
 
+        var hadQueuedReplacements = _replacementQueue.Count > 0;
+        var hadAwbEntries = _awbEntries.Count > 0;
         _replacementQueue.Clear();
+        _awbEntries.Clear();
         ReplacementQueueGrid.SelectedItem = null;
-        AppendLog(UiText.Current.QueueClearedForBankChange);
+        AwbEntriesGrid.SelectedItem = null;
+        if (hadQueuedReplacements || hadAwbEntries)
+        {
+            AppendLog(UiText.Current.BankListsClearedForBankChange);
+        }
     }
 
     private async Task RestoreSelectedAudioAsync()
@@ -1845,7 +1852,7 @@ public sealed partial class MainWindow : Window
             Overwrite = "Sobreescribir",
             Cancel = "Cancelar",
             OverwriteCancelled = "Exportación cancelada: la salida ya existe.",
-            QueueClearedForBankChange = "Cola limpiada al cambiar de banco ACB/AWB.",
+            BankListsClearedForBankChange = "Listas limpiadas al cambiar de banco ACB/AWB.",
             OutputMatchesSource = "La salida coincide con el banco original. Elige otra carpeta o activa el sufijo .mod para no sobrescribir la fuente."
         };
 
@@ -1888,7 +1895,7 @@ public sealed partial class MainWindow : Window
             Overwrite = "Overwrite",
             Cancel = "Cancel",
             OverwriteCancelled = "Export cancelled: output already exists.",
-            QueueClearedForBankChange = "Queue cleared after changing the ACB/AWB bank.",
+            BankListsClearedForBankChange = "Lists cleared after changing the ACB/AWB bank.",
             OutputMatchesSource = "The output path matches the original bank. Choose another folder or keep the .mod suffix to avoid overwriting the source."
         };
 
@@ -1929,7 +1936,7 @@ public sealed partial class MainWindow : Window
         public string Overwrite { get; init; } = "";
         public string Cancel { get; init; } = "";
         public string OverwriteCancelled { get; init; } = "";
-        public string QueueClearedForBankChange { get; init; } = "";
+        public string BankListsClearedForBankChange { get; init; } = "";
         public string OutputMatchesSource { get; init; } = "";
 
         public string AudioMissing(string path) => $"{AudioMissingPrefix}: {path}";
