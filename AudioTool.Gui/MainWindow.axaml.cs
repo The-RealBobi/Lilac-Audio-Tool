@@ -403,7 +403,7 @@ public sealed partial class MainWindow : Window
                     job.Entry.ToString()
                 };
 
-                AddLoopArgs(replaceArgs);
+                AddLoopArgs(replaceArgs, job);
                 if (KeepHcaCheckBox.IsChecked == true)
                 {
                     replaceArgs.Add("--keep-hca");
@@ -439,7 +439,8 @@ public sealed partial class MainWindow : Window
                     "--samples",
                     replaceReport.EffectiveSampleCount.ToString(),
                     "--encode-type",
-                    "2"
+                    "2",
+                    "--patch-cue-lengths"
                 };
                 if (replaceReport.PreparedWavInfo?.Channels is > 0)
                 {
@@ -861,20 +862,31 @@ public sealed partial class MainWindow : Window
         UpdateLoopVisuals();
     }
 
-    private void AddLoopArgs(List<string> args)
+    private (int Mode, int Start, int End) CurrentLoopSnapshot()
     {
-        if (LoopModeComboBox.SelectedIndex == 2)
+        var mode = LoopModeComboBox.SelectedIndex;
+        if (mode < 0)
+        {
+            mode = 0;
+        }
+
+        return (Math.Min(mode, 2), (int)(LoopStartBox.Value ?? 0), (int)(LoopEndBox.Value ?? 0));
+    }
+
+    private void AddLoopArgs(List<string> args, ReplacementJob job)
+    {
+        if (job.LoopMode == 2)
         {
             args.Add("--no-loop");
             return;
         }
 
-        if (LoopModeComboBox.SelectedIndex == 1)
+        if (job.LoopMode == 1)
         {
             args.Add("--loop-start");
-            args.Add(((int)(LoopStartBox.Value ?? 0)).ToString());
+            args.Add(job.LoopStart.ToString());
             args.Add("--loop-end");
-            args.Add(((int)(LoopEndBox.Value ?? 0)).ToString());
+            args.Add(job.LoopEnd.ToString());
         }
     }
 
@@ -882,25 +894,30 @@ public sealed partial class MainWindow : Window
     {
         if (_replacementQueue.Count == 0)
         {
+            var loop = CurrentLoopSnapshot();
             return
             [
                 new ReplacementJob(
                     SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index",
                     (int)(EntryNumberBox.Value ?? 0),
-                    singleAudioPath)
+                    singleAudioPath,
+                    loop.Mode,
+                    loop.Start,
+                    loop.End)
             ];
         }
 
         return _replacementQueue
             .Where(item => File.Exists(item.AudioPath))
-            .Select(item => new ReplacementJob(item.SelectorMode, item.Entry, item.AudioPath))
+            .Select(item => new ReplacementJob(item.SelectorMode, item.Entry, item.AudioPath, item.LoopMode, item.LoopStart, item.LoopEnd))
             .ToList();
     }
 
     private void AddReplacementToQueue(string audioPath, int entry)
     {
         var selectorMode = SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index";
-        _replacementQueue.Add(new ReplacementQueueItem(selectorMode, Math.Max(0, entry), audioPath));
+        var loop = CurrentLoopSnapshot();
+        _replacementQueue.Add(new ReplacementQueueItem(selectorMode, Math.Max(0, entry), audioPath, loop.Mode, loop.Start, loop.End));
         AppendLog($"Cola: {Path.GetFileName(audioPath)} -> {(selectorMode == "--id" ? "ID" : "índice")} {Math.Max(0, entry)}");
         UpdateCommandPreview();
     }
@@ -1068,7 +1085,7 @@ public sealed partial class MainWindow : Window
             return false;
         }
 
-        if (LoopModeComboBox.SelectedIndex == 1)
+        if (_replacementQueue.Count == 0 && LoopModeComboBox.SelectedIndex == 1)
         {
             var start = (int)(LoopStartBox.Value ?? 0);
             var end = (int)(LoopEndBox.Value ?? 0);
@@ -1078,6 +1095,17 @@ public sealed partial class MainWindow : Window
                 return false;
             }
         }
+        else
+        {
+            foreach (var item in _replacementQueue.Where(static item => item.LoopMode == 1))
+            {
+                if (item.LoopStart < 0 || item.LoopEnd <= item.LoopStart)
+                {
+                    AppendLog($"El rango de loop manual no es válido para {(item.SelectorMode == "--id" ? "ID" : "índice")} {item.Entry}.");
+                    return false;
+                }
+            }
+        }
 
         return true;
     }
@@ -1085,7 +1113,8 @@ public sealed partial class MainWindow : Window
     private bool TryResolvePatchAwbId(out int awbId)
     {
         var selectorMode = SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index";
-        return TryResolvePatchAwbId(new ReplacementJob(selectorMode, (int)(EntryNumberBox.Value ?? 0), ""), out awbId);
+        var loop = CurrentLoopSnapshot();
+        return TryResolvePatchAwbId(new ReplacementJob(selectorMode, (int)(EntryNumberBox.Value ?? 0), "", loop.Mode, loop.Start, loop.End), out awbId);
     }
 
     private bool TryResolvePatchAwbId(ReplacementJob job, out int awbId)
@@ -1719,12 +1748,12 @@ public sealed partial class MainWindow : Window
 
     private sealed record AwbEntryViewModel(int Index, int Id, string Extension, long Size, string Name);
 
-    private sealed record ReplacementJob(string SelectorMode, int Entry, string AudioPath)
+    private sealed record ReplacementJob(string SelectorMode, int Entry, string AudioPath, int LoopMode, int LoopStart, int LoopEnd)
     {
         public string Label => $"{(SelectorMode == "--id" ? "ID" : UiText.Current.Index)} {Entry} <- {Path.GetFileName(AudioPath) ?? AudioPath}";
     }
 
-    private sealed record ReplacementQueueItem(string SelectorMode, int Entry, string AudioPath)
+    private sealed record ReplacementQueueItem(string SelectorMode, int Entry, string AudioPath, int LoopMode, int LoopStart, int LoopEnd)
     {
         public string Mode => SelectorMode == "--id" ? "ID" : UiText.Current.Index;
         public string AudioName => Path.GetFileName(AudioPath) ?? AudioPath;
