@@ -4,7 +4,7 @@
 
 Firma: `AFS2`.
 
-Campos usados por la lógica de `L5Decompiler`:
+Campos usados por la lógica de inspección:
 
 - `0x05`: tamaño de cada offset (`2`, `4` u `8` bytes).
 - `0x06`: tamaño de cada id (`2` o `4` bytes).
@@ -100,7 +100,6 @@ FFmpeg se resuelve en este orden aproximado:
 - `L5_AUDIO_FFMPEG_PATH`,
 - `PATH` / Homebrew,
 - `AUDIO/.cache/dependencies`,
-- cache de `L5Decompiler`,
 - descarga verificada desde `eugeneware/ffmpeg-static`.
 
 Loop points:
