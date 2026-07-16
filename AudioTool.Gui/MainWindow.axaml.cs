@@ -439,8 +439,7 @@ public sealed partial class MainWindow : Window
                     "--samples",
                     replaceReport.EffectiveSampleCount.ToString(),
                     "--encode-type",
-                    "2",
-                    "--patch-cue-lengths"
+                    "2"
                 };
                 if (replaceReport.PreparedWavInfo?.Channels is > 0)
                 {

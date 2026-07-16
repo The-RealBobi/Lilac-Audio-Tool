@@ -1617,12 +1617,13 @@ def cmd_replace_awb_wav(args: argparse.Namespace) -> None:
         normalized_hca_ciph = False
         matched_hca_profile = False
         encoded_hca = inspect_hca_with_helper(hca_path, helper_project) if args.codec == "HCA" else {}
-        if args.codec == "HCA":
+        if args.codec == "HCA" and args.match_original_hca_profile:
             matched_hca_profile = match_hca_header_profile(hca_path, original_hca)
             if matched_hca_profile:
                 encoded_hca = inspect_hca_with_helper(hca_path, helper_project)
                 if isinstance(encode_report, dict):
                     encode_report["matchedOriginalHcaProfile"] = True
+        if args.codec == "HCA":
             original_encryption = int(original_hca_body.get("EncryptionType") or 0)
             encoded_encryption = int((encoded_hca.get("Hca") or {}).get("EncryptionType") or 0)
             if original_encryption == 0 and encoded_encryption == 1:
@@ -1780,7 +1781,7 @@ def cmd_patch_acb_waveform(args: argparse.Namespace) -> None:
                 continue
 
             old_length = int_value(row, "Length")
-            if old_length is None:
+            if old_length is None or old_length == 0xFFFFFFFF:
                 continue
 
             old_wave_durations = [old_durations_ms.get(index) for index in waveform_indices]
@@ -1796,9 +1797,8 @@ def cmd_patch_acb_waveform(args: argparse.Namespace) -> None:
             old_max = max(old_wave_durations)
             new_max = max(new_wave_durations)
             single_changed = len(waveform_indices) == 1 and waveform_indices[0] in changed_set
-            infinite_no_loop = old_length == 0xFFFFFFFF and loop_start is None and loop_end is None
             length_matches_waveform = abs(old_length - old_max) <= 2
-            if infinite_no_loop or single_changed or length_matches_waveform:
+            if single_changed or length_matches_waveform:
                 write_be_int(data, length.offset, length.size, new_max)
                 changed_cues.append(cue_index)
 
@@ -1957,6 +1957,7 @@ def build_parser() -> argparse.ArgumentParser:
     replace_wav_parser.add_argument("--no-ffmpeg-download", action="store_true", help="Fail instead of downloading bundled FFmpeg when no local FFmpeg is found.")
     replace_wav_parser.add_argument("--hca-tool", help="Path to CriHcaTool.csproj.")
     replace_wav_parser.add_argument("--keep-hca", action="store_true", help="Keep the encoded HCA next to the target AWB.")
+    replace_wav_parser.add_argument("--match-original-hca-profile", action="store_true", help="Patch generated HCA version/min-resolution to match the replaced entry. Off by default for compatibility.")
     replace_wav_parser.set_defaults(func=cmd_replace_awb_wav)
 
     patch_acb_parser = subparsers.add_parser(
