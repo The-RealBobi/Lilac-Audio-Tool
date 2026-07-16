@@ -31,3 +31,5 @@ vendor/cri_adxle_tools_*/
 
 # External/vendor checkouts are local-only for now.
 vendor/
+*.v2
+/.vs
