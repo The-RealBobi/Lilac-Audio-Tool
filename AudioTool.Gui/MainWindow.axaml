@@ -68,6 +68,7 @@
                   </StackPanel>
                   <DataGrid x:Name="ReplacementQueueGrid"
                             Height="132"
+                            RowHeight="32"
                             AutoGenerateColumns="False"
                             IsReadOnly="True"
                             GridLinesVisibility="Horizontal"
@@ -78,9 +79,13 @@
                       <DataGridTemplateColumn Header="Audio" Width="*">
                         <DataGridTemplateColumn.CellTemplate>
                           <DataTemplate>
-                            <TextBlock Text="{Binding AudioName}"
-                                       TextTrimming="CharacterEllipsis"
-                                       ToolTip.Tip="{Binding AudioPath}" />
+                            <Border ClipToBounds="True">
+                              <TextBlock Text="{Binding AudioName}"
+                                         TextTrimming="CharacterEllipsis"
+                                         TextWrapping="NoWrap"
+                                         VerticalAlignment="Center"
+                                         ToolTip.Tip="{Binding AudioPath}" />
+                            </Border>
                           </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                       </DataGridTemplateColumn>
@@ -166,6 +171,7 @@
             <TextBlock x:Name="EntriesHeaderTextBlock" Text="Entradas AWB" FontWeight="SemiBold" />
             <DataGrid Grid.Row="1"
                       x:Name="AwbEntriesGrid"
+                      RowHeight="32"
                       AutoGenerateColumns="False"
                       IsReadOnly="True"
                       GridLinesVisibility="Horizontal"
@@ -178,9 +184,13 @@
                 <DataGridTemplateColumn Header="Clip" Width="2*">
                   <DataGridTemplateColumn.CellTemplate>
                     <DataTemplate>
-                      <TextBlock Text="{Binding Name}"
-                                 TextTrimming="CharacterEllipsis"
-                                 ToolTip.Tip="{Binding Name}" />
+                      <Border ClipToBounds="True">
+                        <TextBlock Text="{Binding DisplayName}"
+                                   TextTrimming="CharacterEllipsis"
+                                   TextWrapping="NoWrap"
+                                   VerticalAlignment="Center"
+                                   ToolTip.Tip="{Binding TooltipName}" />
+                      </Border>
                     </DataTemplate>
                   </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>

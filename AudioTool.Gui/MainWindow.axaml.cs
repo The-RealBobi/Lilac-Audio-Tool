@@ -1794,7 +1794,11 @@ public sealed partial class MainWindow : Window
         public string CombinedOutput => string.Join(Environment.NewLine, new[] { Stdout, Stderr }.Where(static value => !string.IsNullOrWhiteSpace(value)));
     }
 
-    private sealed record AwbEntryViewModel(int Index, int Id, string Extension, long Size, string Name);
+    private sealed record AwbEntryViewModel(int Index, int Id, string Extension, long Size, string Name)
+    {
+        public string DisplayName => string.IsNullOrWhiteSpace(Name) ? UiText.Current.UnnamedClip : Name;
+        public string TooltipName => string.IsNullOrWhiteSpace(Name) ? UiText.Current.UnnamedClip : Name;
+    }
 
     private sealed record ReplacementJob(string SelectorMode, int Entry, string AudioPath, int LoopMode, int LoopStart, int LoopEnd)
     {
@@ -1843,6 +1847,7 @@ public sealed partial class MainWindow : Window
             Type = "Tipo",
             Size = "Tamaño",
             Clip = "Clip",
+            UnnamedClip = "Sin nombre",
             AutoWavSmpl = "Auto WAV smpl",
             Manual = "Manual",
             NoLoop = "Sin loop",
@@ -1886,6 +1891,7 @@ public sealed partial class MainWindow : Window
             Type = "Type",
             Size = "Size",
             Clip = "Clip",
+            UnnamedClip = "Unnamed",
             AutoWavSmpl = "Auto WAV smpl",
             Manual = "Manual",
             NoLoop = "No loop",
@@ -1927,6 +1933,7 @@ public sealed partial class MainWindow : Window
         public string Type { get; init; } = "";
         public string Size { get; init; } = "";
         public string Clip { get; init; } = "";
+        public string UnnamedClip { get; init; } = "";
         public string AutoWavSmpl { get; init; } = "";
         public string Manual { get; init; } = "";
         public string NoLoop { get; init; } = "";
