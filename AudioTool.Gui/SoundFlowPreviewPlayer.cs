@@ -132,5 +132,9 @@ internal sealed class SoundFlowPreviewPlayer : IDisposable
         _engine ??= new MiniAudioEngine(null);
         _format = format;
         _device = _engine.InitializePlaybackDevice(null, _format, new MiniAudioDeviceConfig());
+        if (!_device.IsRunning)
+        {
+            _device.Start();
+        }
     }
 }
