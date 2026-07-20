@@ -63,9 +63,9 @@ public sealed partial class MainWindow : Window
         SetLoopEnabled(false);
         _uiReady = true;
         UpdateCommandPreview();
-        AppendLog($"AUDIO root: {_audioRoot}");
-        AppendLog($"Datos: {_dataRoot}");
-        AppendLog($"Preferencias: {_preferencesPath}");
+        AppendLog(UiText.Current.AudioRoot(_audioRoot));
+        AppendLog(UiText.Current.DataRoot(_dataRoot));
+        AppendLog(UiText.Current.PreferencesPath(_preferencesPath));
         _ = RestoreSelectedAudioAsync();
         _ = EnsurePluginsAsync();
     }
@@ -128,7 +128,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnBrowseBankClick(object? sender, RoutedEventArgs e)
     {
-        var path = await PickFileAsync("Seleccionar ACB/AWB", [new FilePickerFileType("CRI ACB/AWB") { Patterns = ["*.acb", "*.awb"] }]);
+        var path = await PickFileAsync(UiText.Current.PickBankTitle, [new FilePickerFileType("CRI ACB/AWB") { Patterns = ["*.acb", "*.awb"] }]);
         if (!string.IsNullOrWhiteSpace(path))
         {
             await LoadBankPairAsync(path);
@@ -137,7 +137,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnBrowseAcbClick(object? sender, RoutedEventArgs e)
     {
-        var path = await PickFileAsync("Seleccionar ACB", [new FilePickerFileType("CRI ACB") { Patterns = ["*.acb"] }]);
+        var path = await PickFileAsync(UiText.Current.PickAcbTitle, [new FilePickerFileType("CRI ACB") { Patterns = ["*.acb"] }]);
         if (!string.IsNullOrWhiteSpace(path))
         {
             var previousBank = CurrentBankKey();
@@ -154,7 +154,7 @@ public sealed partial class MainWindow : Window
         var result = await RunPythonAsync(["ensure-plugins"]);
         if (result.ExitCode != 0)
         {
-            AppendLog($"Dependencias: no se pudieron verificar los plugins.\n{result.CombinedOutput}");
+            AppendLog($"{UiText.Current.PluginCheckFailed}{Environment.NewLine}{result.CombinedOutput}");
             return;
         }
 
@@ -163,11 +163,11 @@ public sealed partial class MainWindow : Window
         {
             if (check.Available)
             {
-                AppendLog($"Plugin OK: {check.Name} ({check.Source}) {check.Path}");
+                AppendLog(UiText.Current.PluginAvailable(check.Name ?? "", check.Source ?? "", check.Path ?? ""));
             }
             else
             {
-                AppendLog($"Plugin no disponible: {check.Name}. {check.Error}");
+                AppendLog(UiText.Current.PluginUnavailable(check.Name ?? "", check.Error ?? ""));
             }
         }
     }
@@ -181,7 +181,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnBrowseAwbClick(object? sender, RoutedEventArgs e)
     {
-        var path = await PickFileAsync("Seleccionar AWB", [new FilePickerFileType("CRI AWB") { Patterns = ["*.awb"] }]);
+        var path = await PickFileAsync(UiText.Current.PickAwbTitle, [new FilePickerFileType("CRI AWB") { Patterns = ["*.awb"] }]);
         if (!string.IsNullOrWhiteSpace(path))
         {
             var previousBank = CurrentBankKey();
@@ -195,7 +195,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnBrowseWavClick(object? sender, RoutedEventArgs e)
     {
-        var path = await PickFileAsync("Seleccionar audio", [new FilePickerFileType("Audio") { Patterns = ["*.wav", "*.flac", "*.ogg", "*.mp3", "*.m4a", "*.aac", "*.aiff", "*.aif"] }]);
+        var path = await PickFileAsync(UiText.Current.PickAudioTitle, [new FilePickerFileType("Audio") { Patterns = ["*.wav", "*.flac", "*.ogg", "*.mp3", "*.m4a", "*.aac", "*.aiff", "*.aif"] }]);
         if (string.IsNullOrWhiteSpace(path))
         {
             return;
@@ -215,7 +215,7 @@ public sealed partial class MainWindow : Window
     {
         var folder = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
         {
-            Title = "Seleccionar carpeta de salida",
+            Title = UiText.Current.PickOutputFolderTitle,
             AllowMultiple = false
         });
         var path = folder.Count > 0 ? folder[0].TryGetLocalPath() : null;
@@ -236,7 +236,7 @@ public sealed partial class MainWindow : Window
     {
         if (string.IsNullOrWhiteSpace(AwbPathTextBox.Text))
         {
-            AppendLog("Selecciona un AWB antes de inspeccionar.");
+            AppendLog(UiText.Current.SelectAwbBeforeInspect);
             return;
         }
 
@@ -264,15 +264,20 @@ public sealed partial class MainWindow : Window
                 _awbEntries.Add(new AwbEntryViewModel(entry.Index, entry.Id, entry.Extension ?? "", entry.Size, entry.Name ?? "", entry.CueNames ?? []));
             }
 
-            AppendLog($"AWB inspeccionado: {_awbEntries.Count} entradas.");
+            AppendLog(UiText.Current.AwbInspected(_awbEntries.Count));
         });
     }
 
     private async void OnPreviewEntryClick(object? sender, RoutedEventArgs e)
     {
+        await PreviewSelectedAwbEntryAsync(autoPlay: true);
+    }
+
+    private async Task PreviewSelectedAwbEntryAsync(bool autoPlay)
+    {
         if (string.IsNullOrWhiteSpace(AwbPathTextBox.Text) || !File.Exists(AwbPathTextBox.Text))
         {
-            AppendLog("Selecciona un AWB antes de reproducir una entrada.");
+            AppendLog(UiText.Current.SelectAwbBeforePreview);
             return;
         }
 
@@ -299,17 +304,22 @@ public sealed partial class MainWindow : Window
             var preview = JsonSerializer.Deserialize<PreviewReport>(result.Stdout, JsonOptions());
             if (string.IsNullOrWhiteSpace(preview?.Wav) || !File.Exists(preview.Wav))
             {
-                AppendLog("No se pudo preparar el WAV de previsualización.");
+                AppendLog(UiText.Current.PreviewFailed);
                 return;
             }
 
-            var decoder = string.IsNullOrWhiteSpace(preview.Decoder) ? "desconocido" : preview.Decoder;
-            AppendLog($"Previsualización ({decoder}): {preview.Wav}");
-            OpenWithSystemPlayer(preview.Wav);
+            await LoadWavInfoAsync(preview.Wav);
+            SetPlayerSource(preview.Wav);
+            var decoder = string.IsNullOrWhiteSpace(preview.Decoder) ? UiText.Current.Unknown : preview.Decoder;
+            AppendLog(UiText.Current.PreviewReady(decoder, preview.Wav));
+            if (autoPlay)
+            {
+                StartPlayback();
+            }
         });
     }
 
-    private void OnPlaybackToggleClick(object? sender, RoutedEventArgs e)
+    private async void OnPlaybackToggleClick(object? sender, RoutedEventArgs e)
     {
         if (_playbackProcess is not null && !_playbackProcess.HasExited)
         {
@@ -330,7 +340,13 @@ public sealed partial class MainWindow : Window
 
         if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
         {
-            AppendLog("Selecciona un audio en la cola de cambios para reproducirlo, o usa Reproducir entrada para escuchar el AWB.");
+            if (!string.IsNullOrWhiteSpace(AwbPathTextBox.Text) && File.Exists(AwbPathTextBox.Text))
+            {
+                await PreviewSelectedAwbEntryAsync(autoPlay: true);
+                return;
+            }
+
+            AppendLog(UiText.Current.SelectAudioToPlay);
             return;
         }
 
@@ -356,7 +372,7 @@ public sealed partial class MainWindow : Window
         var jobs = BuildReplacementJobs(wavPath);
         if (jobs.Count == 0)
         {
-            AppendLog("Añade al menos un audio de reemplazo.");
+            AppendLog(UiText.Current.AddReplacementRequired);
             return;
         }
 
@@ -418,7 +434,7 @@ public sealed partial class MainWindow : Window
                     replaceArgs.Add("--keep-hca");
                 }
 
-                AppendLog($"Generando AWB modificado ({i + 1}/{jobs.Count}): {job.Label}");
+                AppendLog(UiText.Current.BuildingAwb(i + 1, jobs.Count, job.Label));
                 var replaceResult = await RunPythonAsync(replaceArgs);
                 AppendLog(replaceResult.CombinedOutput);
                 if (replaceResult.ExitCode != 0)
@@ -472,7 +488,7 @@ public sealed partial class MainWindow : Window
                 {
                     patchArgs.Add("--no-loop");
                 }
-                AppendLog($"Parcheando WaveformTable del ACB ({i + 1}/{jobs.Count})...");
+                AppendLog(UiText.Current.PatchingBank(i + 1, jobs.Count));
                 var patchResult = await RunPythonAsync(patchArgs);
                 AppendLog(patchResult.CombinedOutput);
                 if (patchResult.ExitCode != 0)
@@ -495,7 +511,7 @@ public sealed partial class MainWindow : Window
                 Path.GetFileNameWithoutExtension(awbPath)
             };
 
-            AppendLog("Actualizando hash/header del AWB en ACB...");
+            AppendLog(UiText.Current.UpdatingBankInfo);
             var streamPatchResult = await RunPythonAsync(streamPatchArgs);
             AppendLog(streamPatchResult.CombinedOutput);
             if (streamPatchResult.ExitCode == 0)
@@ -505,8 +521,8 @@ public sealed partial class MainWindow : Window
                 {
                     DeleteExportReports(targetAcb, targetAwb);
                 }
-                AppendLog($"Listo: {targetAcb}");
-                AppendLog($"Listo: {targetAwb}");
+                AppendLog(UiText.Current.Done(targetAcb));
+                AppendLog(UiText.Current.Done(targetAwb));
             }
         });
     }
@@ -567,7 +583,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnSubstituteClick(object? sender, RoutedEventArgs e)
     {
-        var path = await PickFileAsync("Seleccionar audio de reemplazo", [new FilePickerFileType("Audio") { Patterns = ["*.wav", "*.flac", "*.ogg", "*.mp3", "*.m4a", "*.aac", "*.aiff", "*.aif"] }]);
+        var path = await PickFileAsync(UiText.Current.PickReplacementAudioTitle, [new FilePickerFileType("Audio") { Patterns = ["*.wav", "*.flac", "*.ogg", "*.mp3", "*.m4a", "*.aac", "*.aiff", "*.aif"] }]);
         if (string.IsNullOrWhiteSpace(path))
         {
             return;
@@ -586,7 +602,7 @@ public sealed partial class MainWindow : Window
         var audioPath = WavPathTextBox.Text?.Trim() ?? "";
         if (!File.Exists(audioPath))
         {
-            AppendLog("Selecciona un audio de reemplazo antes de añadirlo a la cola.");
+            AppendLog(UiText.Current.SelectReplacementBeforeQueue);
             return;
         }
 
@@ -799,7 +815,7 @@ public sealed partial class MainWindow : Window
             LoopModeComboBox.SelectedIndex = 2;
             SetLoopEnabled(false);
             UpdateLoopVisuals();
-            AppendLog("El archivo no expone metadata directa de loop/duración. Se normalizará con FFmpeg al generar.");
+            AppendLog(UiText.Current.AudioMetadataMissing);
             return;
         }
 
@@ -820,7 +836,7 @@ public sealed partial class MainWindow : Window
         LoopModeComboBox.SelectedIndex = _wavLoopStart is null ? 2 : 0;
         SetLoopEnabled(_wavLoopStart is not null);
         UpdateLoopVisuals();
-        AppendLog($"Audio: {_wavSamples} samples, {_wavSampleRate} Hz, loop: {DescribeLoop()}.");
+        AppendLog(UiText.Current.AudioInfo(_wavSamples, _wavSampleRate, DescribeLoop()));
     }
 
     private static ReplaceReport LoadReplaceReport(string targetAwb)
@@ -830,7 +846,7 @@ public sealed partial class MainWindow : Window
         var report = JsonSerializer.Deserialize<ReplaceReport>(json, JsonOptions());
         if (report is null || report.EffectiveSampleCount <= 0)
         {
-            throw new InvalidDataException($"No se pudo leer el reporte de reemplazo: {reportPath}");
+            throw new InvalidDataException(UiText.Current.ReplaceReportReadFailed(reportPath));
         }
 
         return report;
@@ -927,7 +943,7 @@ public sealed partial class MainWindow : Window
         var selectorMode = SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index";
         var loop = CurrentLoopSnapshot();
         _replacementQueue.Add(new ReplacementQueueItem(selectorMode, Math.Max(0, entry), audioPath, loop.Mode, loop.Start, loop.End));
-        AppendLog($"Cola: {Path.GetFileName(audioPath)} -> {(selectorMode == "--id" ? "ID" : "índice")} {Math.Max(0, entry)}");
+        AppendLog(UiText.Current.Queued(Path.GetFileName(audioPath), selectorMode == "--id" ? "ID" : UiText.Current.Index, Math.Max(0, entry)));
         UpdateCommandPreview();
     }
 
@@ -1068,14 +1084,14 @@ public sealed partial class MainWindow : Window
         {
             if (!File.Exists(path))
             {
-                AppendLog($"No existe el archivo: {path}");
+                AppendLog(UiText.Current.FileMissing(path));
                 return false;
             }
         }
 
         if (_replacementQueue.Count == 0 && !File.Exists(wavPath))
         {
-            AppendLog($"No existe el archivo: {wavPath}");
+            AppendLog(UiText.Current.FileMissing(wavPath));
             return false;
         }
 
@@ -1083,14 +1099,14 @@ public sealed partial class MainWindow : Window
         {
             if (!File.Exists(item.AudioPath))
             {
-                AppendLog($"No existe el archivo en cola: {item.AudioPath}");
+                AppendLog(UiText.Current.QueuedFileMissing(item.AudioPath));
                 return false;
             }
         }
 
         if (string.IsNullOrWhiteSpace(outputDirectory))
         {
-            AppendLog("Selecciona una carpeta de salida.");
+            AppendLog(UiText.Current.SelectOutputFolder);
             return false;
         }
 
@@ -1100,7 +1116,7 @@ public sealed partial class MainWindow : Window
             var end = (int)(LoopEndBox.Value ?? 0);
             if (_wavSamples <= 0 || start < 0 || end <= start || end > _wavSamples)
             {
-                AppendLog("El rango de loop manual no es válido.");
+                AppendLog(UiText.Current.InvalidLoopRange);
                 return false;
             }
         }
@@ -1110,7 +1126,7 @@ public sealed partial class MainWindow : Window
             {
                 if (item.LoopStart < 0 || item.LoopEnd <= item.LoopStart)
                 {
-                    AppendLog($"El rango de loop manual no es válido para {(item.SelectorMode == "--id" ? "ID" : "índice")} {item.Entry}.");
+                    AppendLog(UiText.Current.InvalidLoopRangeForEntry(item.SelectorMode == "--id" ? "ID" : UiText.Current.Index, item.Entry));
                     return false;
                 }
             }
@@ -1138,7 +1154,7 @@ public sealed partial class MainWindow : Window
         if (entry is null)
         {
             awbId = -1;
-            AppendLog("Para parchear el ACB por índice, primero lee las entradas AWB o usa ID AWB directamente.");
+            AppendLog(UiText.Current.ReadEntriesBeforeIndexPatch);
             return false;
         }
 
@@ -1174,8 +1190,8 @@ public sealed partial class MainWindow : Window
         LoopTimeline.HasLoop = LoopModeComboBox.SelectedIndex != 2 && _wavSamples > 0 && end > start;
         UpdatePlaybackVisuals();
         LoopSummaryTextBlock.Text = _wavSamples <= 0
-            ? "Carga un audio para ver duración y loop."
-            : $"Audio: {_wavSamples} samples ({FormatSeconds(_wavSamples)}). Loop: {DescribeLoop()}.";
+            ? UiText.Current.AudioEmptySummary
+            : UiText.Current.AudioSummary(_wavSamples, FormatSeconds(_wavSamples), DescribeLoop());
     }
 
     private void SetLoopEnabled(bool enabled)
@@ -1235,7 +1251,7 @@ public sealed partial class MainWindow : Window
         _playbackProcess = Process.Start(startInfo);
         if (_playbackProcess is null)
         {
-            error = "No se pudo iniciar el reproductor integrado.";
+            error = UiText.Current.PlayerStartFailed;
             return false;
         }
 
@@ -1245,8 +1261,8 @@ public sealed partial class MainWindow : Window
             _playbackProcess.Dispose();
             _playbackProcess = null;
             error = string.IsNullOrWhiteSpace(stderr)
-                ? "El reproductor integrado no pudo reproducir ese archivo."
-                : $"El reproductor integrado no pudo reproducir ese archivo: {stderr}";
+                ? UiText.Current.PlayerCannotPlay
+                : UiText.Current.PlayerCannotPlayWithError(stderr);
             return false;
         }
 
@@ -1330,7 +1346,7 @@ public sealed partial class MainWindow : Window
     {
         if (LoopModeComboBox.SelectedIndex == 2 || _wavSamples <= 0)
         {
-            return "sin loop";
+            return UiText.Current.NoLoopLower;
         }
 
         var start = (int)(LoopStartBox.Value ?? 0);
@@ -1357,8 +1373,8 @@ public sealed partial class MainWindow : Window
             : _awbEntries.FirstOrDefault(item => item.Index == (int)(EntryNumberBox.Value ?? 0))?.Id.ToString() ?? "?";
         var count = _replacementQueue.Count == 0 ? 1 : _replacementQueue.Count;
         CommandPreviewTextBlock.Text = count == 1
-            ? $"replace-awb-wav ... {selectorMode} {selectorValue} / patch-acb-waveform ... --id {patchIdText} / patch-acb-stream-awb ..."
-            : $"{count} reemplazos en el mismo ACB/AWB / patch-acb-stream-awb al terminar ...";
+            ? UiText.Current.SingleReplacementPreview(selectorMode == "--id" ? "ID" : UiText.Current.Index, selectorValue, patchIdText)
+            : UiText.Current.BatchReplacementPreview(count);
     }
 
     private async Task<string?> PickFileAsync(string title, IReadOnlyList<FilePickerFileType> filters)
@@ -1377,7 +1393,7 @@ public sealed partial class MainWindow : Window
         var start = OutputDirectoryTextBox.Text?.Trim();
         var options = new FolderPickerOpenOptions
         {
-            Title = "Seleccionar carpeta de exportación",
+            Title = UiText.Current.PickExportFolderTitle,
             AllowMultiple = false
         };
         if (!string.IsNullOrWhiteSpace(start) && Directory.Exists(start))
@@ -1423,7 +1439,7 @@ public sealed partial class MainWindow : Window
         }
         else
         {
-            AppendLog("No se encontró el par ACB/AWB junto al archivo seleccionado.");
+            AppendLog(UiText.Current.BankPairMissing);
         }
     }
 
@@ -1569,7 +1585,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            AppendLog($"No se pudieron cargar preferencias: {ex.Message}");
+            AppendLog(UiText.Current.PreferencesLoadFailed(ex.Message));
         }
         finally
         {
@@ -1607,7 +1623,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            AppendLog($"No se pudieron guardar preferencias: {ex.Message}");
+            AppendLog(UiText.Current.PreferencesSaveFailed(ex.Message));
         }
     }
 
@@ -1640,7 +1656,7 @@ public sealed partial class MainWindow : Window
         var python = ResolvePython();
         if (python is null)
         {
-            return new ProcessResult(127, "", "No se encontró Python 3. Instala Python o define L5_AUDIO_PYTHON con la ruta del ejecutable.");
+            return new ProcessResult(127, "", UiText.Current.PythonMissing);
         }
 
         var startInfo = new ProcessStartInfo
@@ -1663,7 +1679,7 @@ public sealed partial class MainWindow : Window
         using var process = Process.Start(startInfo);
         if (process is null)
         {
-            return new ProcessResult(127, "", "No se pudo iniciar Python.");
+            return new ProcessResult(127, "", UiText.Current.PythonStartFailed);
         }
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
@@ -1854,13 +1870,13 @@ public sealed partial class MainWindow : Window
             Files = "1. Banco",
             Bank = "ACB/AWB",
             Browse = "Examinar",
-            Changes = "2. Sustituciones",
+            Changes = "2. Entrada",
             ReadEntries = "Leer entradas AWB",
-            PlayEntry = "Reproducir entrada",
+            PlayEntry = "Escuchar",
             Replace = "Sustituir",
             Remove = "Quitar",
             Clear = "Limpiar",
-            Loop = "3. Loop",
+            Loop = "3. Reproductor y loop",
             UseSmpl = "Usar smpl",
             KeepHca = "Guardar audio codificado junto al AWB",
             KeepReports = "Guardar informes de exportación",
@@ -1869,7 +1885,7 @@ public sealed partial class MainWindow : Window
             Export = "4. Exportar ACB/AWB",
             Entries = "Entradas AWB",
             Operation = "Registro",
-            Queue = "Cola",
+            Queue = "4. Cola",
             AcbWatermark = "Banco .acb",
             AwbWatermark = "Banco .awb",
             Mode = "Modo",
@@ -1893,7 +1909,34 @@ public sealed partial class MainWindow : Window
             Cancel = "Cancelar",
             OverwriteCancelled = "Exportación cancelada: la salida ya existe.",
             BankListsClearedForBankChange = "Listas limpiadas al cambiar de banco ACB/AWB.",
-            OutputMatchesSource = "La salida coincide con el banco original. Elige otra carpeta o activa el sufijo .mod para no sobrescribir la fuente."
+            OutputMatchesSource = "La salida coincide con el banco original. Elige otra carpeta o activa el sufijo .mod para no sobrescribir la fuente.",
+            Unknown = "desconocido",
+            PluginCheckFailed = "No se pudieron comprobar las herramientas de audio.",
+            SelectAwbBeforeInspect = "Selecciona un AWB antes de leer las entradas.",
+            SelectAwbBeforePreview = "Selecciona un AWB antes de escuchar una entrada.",
+            PreviewFailed = "No se pudo preparar la entrada para escucharla.",
+            SelectAudioToPlay = "Selecciona una entrada o un audio de la cola para escucharlo.",
+            AddReplacementRequired = "Añade al menos un reemplazo.",
+            UpdatingBankInfo = "Actualizando datos del banco...",
+            PickReplacementAudioTitle = "Seleccionar audio de reemplazo",
+            SelectReplacementBeforeQueue = "Selecciona un audio de reemplazo antes de añadirlo a la cola.",
+            AudioMetadataMissing = "No se pudo leer la duración directamente. Se normalizará al exportar.",
+            SelectOutputFolder = "Selecciona una carpeta de salida.",
+            InvalidLoopRange = "El rango de loop manual no es válido.",
+            ReadEntriesBeforeIndexPatch = "Para usar índice, primero lee las entradas del AWB.",
+            BankPairMissing = "No se encontró el par ACB/AWB junto al archivo seleccionado.",
+            AudioEmptySummary = "Carga o escucha un audio para ver duración y loop.",
+            NoLoopLower = "sin loop",
+            PlayerStartFailed = "No se pudo iniciar el reproductor integrado.",
+            PlayerCannotPlay = "El reproductor integrado no pudo reproducir ese archivo.",
+            PythonMissing = "No se encontró Python 3. Instala Python o define L5_AUDIO_PYTHON con la ruta del ejecutable.",
+            PythonStartFailed = "No se pudo iniciar Python.",
+            PickBankTitle = "Seleccionar ACB/AWB",
+            PickAcbTitle = "Seleccionar ACB",
+            PickAwbTitle = "Seleccionar AWB",
+            PickAudioTitle = "Seleccionar audio",
+            PickOutputFolderTitle = "Seleccionar carpeta de salida",
+            PickExportFolderTitle = "Seleccionar carpeta de exportación"
         };
 
         private static UiText English { get; } = new()
@@ -1902,13 +1945,13 @@ public sealed partial class MainWindow : Window
             Files = "1. Bank",
             Bank = "ACB/AWB",
             Browse = "Browse",
-            Changes = "2. Replacements",
+            Changes = "2. Entry",
             ReadEntries = "Read AWB entries",
-            PlayEntry = "Play entry",
+            PlayEntry = "Listen",
             Replace = "Replace",
             Remove = "Remove",
             Clear = "Clear",
-            Loop = "3. Loop",
+            Loop = "3. Player and loop",
             UseSmpl = "Use smpl",
             KeepHca = "Keep encoded audio next to the AWB",
             KeepReports = "Keep export reports",
@@ -1917,7 +1960,7 @@ public sealed partial class MainWindow : Window
             Export = "4. Export ACB/AWB",
             Entries = "AWB Entries",
             Operation = "Log",
-            Queue = "Queue",
+            Queue = "4. Queue",
             AcbWatermark = ".acb bank",
             AwbWatermark = ".awb bank",
             Mode = "Mode",
@@ -1941,7 +1984,34 @@ public sealed partial class MainWindow : Window
             Cancel = "Cancel",
             OverwriteCancelled = "Export cancelled: output already exists.",
             BankListsClearedForBankChange = "Lists cleared after changing the ACB/AWB bank.",
-            OutputMatchesSource = "The output path matches the original bank. Choose another folder or keep the .mod suffix to avoid overwriting the source."
+            OutputMatchesSource = "The output path matches the original bank. Choose another folder or keep the .mod suffix to avoid overwriting the source.",
+            Unknown = "unknown",
+            PluginCheckFailed = "Audio tools could not be checked.",
+            SelectAwbBeforeInspect = "Select an AWB before reading entries.",
+            SelectAwbBeforePreview = "Select an AWB before listening to an entry.",
+            PreviewFailed = "The entry could not be prepared for playback.",
+            SelectAudioToPlay = "Select an entry or queued audio to listen to it.",
+            AddReplacementRequired = "Add at least one replacement.",
+            UpdatingBankInfo = "Updating bank data...",
+            PickReplacementAudioTitle = "Select replacement audio",
+            SelectReplacementBeforeQueue = "Select replacement audio before adding it to the queue.",
+            AudioMetadataMissing = "Duration could not be read directly. The file will be normalized on export.",
+            SelectOutputFolder = "Select an output folder.",
+            InvalidLoopRange = "The manual loop range is invalid.",
+            ReadEntriesBeforeIndexPatch = "Read the AWB entries before using index mode.",
+            BankPairMissing = "No matching ACB/AWB pair was found next to the selected file.",
+            AudioEmptySummary = "Load or listen to audio to see duration and loop data.",
+            NoLoopLower = "no loop",
+            PlayerStartFailed = "The built-in player could not be started.",
+            PlayerCannotPlay = "The built-in player could not play that file.",
+            PythonMissing = "Python 3 was not found. Install Python or set L5_AUDIO_PYTHON to its executable path.",
+            PythonStartFailed = "Python could not be started.",
+            PickBankTitle = "Select ACB/AWB",
+            PickAcbTitle = "Select ACB",
+            PickAwbTitle = "Select AWB",
+            PickAudioTitle = "Select audio",
+            PickOutputFolderTitle = "Select output folder",
+            PickExportFolderTitle = "Select export folder"
         };
 
         public string Subtitle { get; init; } = "";
@@ -1988,8 +2058,57 @@ public sealed partial class MainWindow : Window
         public string OverwriteCancelled { get; init; } = "";
         public string BankListsClearedForBankChange { get; init; } = "";
         public string OutputMatchesSource { get; init; } = "";
+        public string Unknown { get; init; } = "";
+        public string PluginCheckFailed { get; init; } = "";
+        public string SelectAwbBeforeInspect { get; init; } = "";
+        public string SelectAwbBeforePreview { get; init; } = "";
+        public string PreviewFailed { get; init; } = "";
+        public string SelectAudioToPlay { get; init; } = "";
+        public string AddReplacementRequired { get; init; } = "";
+        public string UpdatingBankInfo { get; init; } = "";
+        public string PickReplacementAudioTitle { get; init; } = "";
+        public string SelectReplacementBeforeQueue { get; init; } = "";
+        public string AudioMetadataMissing { get; init; } = "";
+        public string SelectOutputFolder { get; init; } = "";
+        public string InvalidLoopRange { get; init; } = "";
+        public string ReadEntriesBeforeIndexPatch { get; init; } = "";
+        public string BankPairMissing { get; init; } = "";
+        public string AudioEmptySummary { get; init; } = "";
+        public string NoLoopLower { get; init; } = "";
+        public string PlayerStartFailed { get; init; } = "";
+        public string PlayerCannotPlay { get; init; } = "";
+        public string PythonMissing { get; init; } = "";
+        public string PythonStartFailed { get; init; } = "";
+        public string PickBankTitle { get; init; } = "";
+        public string PickAcbTitle { get; init; } = "";
+        public string PickAwbTitle { get; init; } = "";
+        public string PickAudioTitle { get; init; } = "";
+        public string PickOutputFolderTitle { get; init; } = "";
+        public string PickExportFolderTitle { get; init; } = "";
 
         public string AudioMissing(string path) => $"{AudioMissingPrefix}: {path}";
+        public string AudioRoot(string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Raíz: {path}" : $"Root: {path}";
+        public string DataRoot(string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Datos: {path}" : $"Data: {path}";
+        public string PreferencesPath(string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Preferencias: {path}" : $"Preferences: {path}";
+        public string PluginAvailable(string name, string source, string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Herramienta lista: {name} ({source}) {path}" : $"Tool ready: {name} ({source}) {path}";
+        public string PluginUnavailable(string name, string error) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Herramienta no disponible: {name}. {error}" : $"Tool unavailable: {name}. {error}";
+        public string AwbInspected(int count) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Entradas leídas: {count}." : $"Entries read: {count}.";
+        public string PreviewReady(string decoder, string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Listo para escuchar ({decoder}): {path}" : $"Ready to listen ({decoder}): {path}";
+        public string BuildingAwb(int current, int total, string label) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Generando audio ({current}/{total}): {label}" : $"Building audio ({current}/{total}): {label}";
+        public string PatchingBank(int current, int total) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Actualizando banco ({current}/{total})..." : $"Updating bank ({current}/{total})...";
+        public string Done(string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Listo: {path}" : $"Done: {path}";
+        public string AudioInfo(int samples, int sampleRate, string loop) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Audio: {samples} muestras, {sampleRate} Hz, loop: {loop}." : $"Audio: {samples} samples, {sampleRate} Hz, loop: {loop}.";
+        public string Queued(string file, string mode, int entry) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Cola: {file} -> {mode} {entry}" : $"Queued: {file} -> {mode} {entry}";
+        public string FileMissing(string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"No existe el archivo: {path}" : $"File not found: {path}";
+        public string QueuedFileMissing(string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"No existe el archivo en cola: {path}" : $"Queued file not found: {path}";
+        public string InvalidLoopRangeForEntry(string mode, int entry) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"El rango de loop manual no es válido para {mode} {entry}." : $"The manual loop range is invalid for {mode} {entry}.";
+        public string AudioSummary(int samples, string duration, string loop) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Audio: {samples} muestras ({duration}). Loop: {loop}." : $"Audio: {samples} samples ({duration}). Loop: {loop}.";
+        public string PlayerCannotPlayWithError(string error) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"El reproductor integrado no pudo reproducir ese archivo: {error}" : $"The built-in player could not play that file: {error}";
+        public string ReplaceReportReadFailed(string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"No se pudo leer el informe de reemplazo: {path}" : $"Replacement report could not be read: {path}";
+        public string SingleReplacementPreview(string mode, string selectorValue, string patchId) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Se exportará 1 reemplazo: {mode} {selectorValue} -> entrada {patchId}." : $"1 replacement will be exported: {mode} {selectorValue} -> entry {patchId}.";
+        public string BatchReplacementPreview(int count) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Se exportarán {count} reemplazos en este banco." : $"{count} replacements will be exported in this bank.";
+        public string PreferencesLoadFailed(string message) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"No se pudieron cargar preferencias: {message}" : $"Preferences could not be loaded: {message}";
+        public string PreferencesSaveFailed(string message) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"No se pudieron guardar preferencias: {message}" : $"Preferences could not be saved: {message}";
         public string EntryCueDetails(int id, int index, string cueDetails) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase)
             ? $"Entrada {id} / índice {index}{Environment.NewLine}{cueDetails}"
             : $"Entry {id} / index {index}{Environment.NewLine}{cueDetails}";

@@ -65,30 +65,6 @@
 
             <Border Padding="12" CornerRadius="8" Background="#16232424">
               <StackPanel Spacing="10">
-                <TextBlock x:Name="ChangesHeaderTextBlock" Text="2. Sustituciones" FontWeight="SemiBold" />
-                <Grid ColumnDefinitions="118,*" ColumnSpacing="8">
-                  <ComboBox x:Name="SelectorModeComboBox" SelectedIndex="0" SelectionChanged="OnSelectorChanged">
-                    <ComboBoxItem Content="ID AWB" />
-                    <ComboBoxItem Content="Índice" />
-                  </ComboBox>
-                  <NumericUpDown Grid.Column="1"
-                                 x:Name="EntryNumberBox"
-                                 Minimum="0"
-                                 Maximum="999999"
-                                 Increment="1"
-                                 Value="0"
-                                 ValueChanged="OnSelectorNumberChanged" />
-                </Grid>
-                <Button x:Name="SubstituteButton"
-                        Content="Sustituir"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Center"
-                        Click="OnSubstituteClick" />
-              </StackPanel>
-            </Border>
-
-            <Border Padding="12" CornerRadius="8" Background="#16232424">
-              <StackPanel Spacing="10">
                 <TextBlock x:Name="ExportOptionsHeaderTextBlock" Text="Opciones de exportación" FontWeight="SemiBold" />
                 <CheckBox x:Name="KeepHcaCheckBox"
                           Content="Guardar audio codificado junto al AWB"
@@ -115,7 +91,7 @@
                     Cursor="SizeWestEast" />
 
       <Border Grid.Column="2" Padding="14" CornerRadius="10" Background="#101C1C1C">
-        <Grid RowDefinitions="Auto,Auto,*" RowSpacing="10">
+        <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="10">
           <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
             <TextBlock x:Name="EntriesHeaderTextBlock"
                        Text="Entradas AWB"
@@ -137,7 +113,30 @@
                        TextWrapping="Wrap" />
           </Border>
 
-          <DataGrid Grid.Row="2"
+          <Grid Grid.Row="2" ColumnDefinitions="118,120,Auto,Auto" ColumnSpacing="8">
+            <TextBlock x:Name="ChangesHeaderTextBlock"
+                       Text="2. Entrada"
+                       VerticalAlignment="Center"
+                       FontWeight="SemiBold" />
+            <ComboBox Grid.Column="1" x:Name="SelectorModeComboBox" SelectedIndex="0" SelectionChanged="OnSelectorChanged">
+              <ComboBoxItem Content="ID AWB" />
+              <ComboBoxItem Content="Índice" />
+            </ComboBox>
+            <NumericUpDown Grid.Column="2"
+                           x:Name="EntryNumberBox"
+                           Width="110"
+                           Minimum="0"
+                           Maximum="999999"
+                           Increment="1"
+                           Value="0"
+                           ValueChanged="OnSelectorNumberChanged" />
+            <Button Grid.Column="3"
+                    x:Name="SubstituteButton"
+                    Content="Sustituir"
+                    Click="OnSubstituteClick" />
+          </Grid>
+
+          <DataGrid Grid.Row="3"
                     x:Name="AwbEntriesGrid"
                     RowHeight="34"
                     AutoGenerateColumns="False"
@@ -177,7 +176,7 @@
                     ShowsPreview="True"
                     Cursor="SizeWestEast" />
 
-      <Grid Grid.Column="4" RowDefinitions="Auto,12,190,12,*">
+      <Grid Grid.Column="4" RowDefinitions="Auto,12,210,12,*">
         <Border Grid.Row="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
           <StackPanel Spacing="10">
             <TextBlock x:Name="LoopHeaderTextBlock" Text="3. Loop" FontWeight="SemiBold" />
