@@ -396,7 +396,7 @@ def cue_display_name(row: list["UtfField"], cue_index: int) -> str:
     return f"Cue {cue_index}"
 
 
-def acb_awb_clip_names(acb_data: bytes) -> dict[int, str]:
+def acb_awb_clip_name_lists(acb_data: bytes) -> dict[int, list[str]]:
     table = parse_utf(acb_data)
     nested = table.nested_tables()
     waveform_table = nested.get("WaveformTable")
@@ -433,9 +433,13 @@ def acb_awb_clip_names(acb_data: bytes) -> dict[int, str]:
             if cue_name not in names:
                 names.append(cue_name)
 
+    return names_by_awb_id
+
+
+def acb_awb_clip_names(acb_data: bytes) -> dict[int, str]:
     return {
-        awb_id: ", ".join(names[:3]) + ("..." if len(names) > 3 else "")
-        for awb_id, names in names_by_awb_id.items()
+        awb_id: (names[0] if names else "")
+        for awb_id, names in acb_awb_clip_name_lists(acb_data).items()
     }
 
 
@@ -1297,9 +1301,12 @@ def cmd_inspect(args: argparse.Namespace) -> None:
     if data.startswith(AWB_MAGIC):
         metadata = awb_metadata(parse_awb(data))
         if args.acb:
-            clip_names = acb_awb_clip_names(read_cri(Path(args.acb)))
+            clip_names = acb_awb_clip_name_lists(read_cri(Path(args.acb)))
             for entry in metadata["entries"]:
-                entry["name"] = clip_names.get(entry["id"], "")
+                names = clip_names.get(entry["id"], [])
+                entry["name"] = names[0] if names else ""
+                entry["cue_names"] = names
+                entry["cue_count"] = len(names)
         if output:
             write_json(output / f"{source.name}.metadata.json", metadata)
         print(json.dumps(metadata, ensure_ascii=False, indent=2))

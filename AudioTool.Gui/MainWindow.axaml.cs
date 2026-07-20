@@ -92,6 +92,7 @@ public sealed partial class MainWindow : Window
         UseModSuffixCheckBox.Content = strings.UseModSuffix;
         ExecuteButton.Content = strings.Export;
         EntriesHeaderTextBlock.Text = strings.Entries;
+        SelectedEntryTextBlock.Text = strings.SelectEntryCueHint;
         OperationHeaderTextBlock.Text = strings.Operation;
         AcbPathTextBox.Watermark = strings.AcbWatermark;
         AwbPathTextBox.Watermark = strings.AwbWatermark;
@@ -102,7 +103,8 @@ public sealed partial class MainWindow : Window
         AwbEntriesGrid.Columns[1].Header = strings.Id;
         AwbEntriesGrid.Columns[2].Header = strings.Type;
         AwbEntriesGrid.Columns[3].Header = strings.Size;
-        AwbEntriesGrid.Columns[4].Header = strings.Clip;
+        AwbEntriesGrid.Columns[4].Header = strings.PrimaryCue;
+        AwbEntriesGrid.Columns[5].Header = strings.CueRefs;
 
         if (SelectorModeComboBox.Items[1] is ComboBoxItem indexItem)
         {
@@ -254,9 +256,10 @@ public sealed partial class MainWindow : Window
 
             var metadata = JsonSerializer.Deserialize<AwbMetadata>(result.Stdout, JsonOptions());
             _awbEntries.Clear();
+            UpdateSelectedEntryDetails(null);
             foreach (var entry in metadata?.Entries ?? [])
             {
-                _awbEntries.Add(new AwbEntryViewModel(entry.Index, entry.Id, entry.Extension ?? "", entry.Size, entry.Name ?? ""));
+                _awbEntries.Add(new AwbEntryViewModel(entry.Index, entry.Id, entry.Extension ?? "", entry.Size, entry.Name ?? "", entry.CueNames ?? []));
             }
 
             AppendLog($"AWB inspeccionado: {_awbEntries.Count} entradas.");
@@ -555,6 +558,7 @@ public sealed partial class MainWindow : Window
 
         SelectorModeComboBox.SelectedIndex = 0;
         EntryNumberBox.Value = entry.Id;
+        UpdateSelectedEntryDetails(entry);
         SavePreferences();
         UpdateCommandPreview();
     }
@@ -1476,10 +1480,23 @@ public sealed partial class MainWindow : Window
         _awbEntries.Clear();
         ReplacementQueueGrid.SelectedItem = null;
         AwbEntriesGrid.SelectedItem = null;
+        UpdateSelectedEntryDetails(null);
         if (hadQueuedReplacements || hadAwbEntries)
         {
             AppendLog(UiText.Current.BankListsClearedForBankChange);
         }
+    }
+
+    private void UpdateSelectedEntryDetails(AwbEntryViewModel? entry)
+    {
+        if (!_uiReady || SelectedEntryTextBlock is null)
+        {
+            return;
+        }
+
+        SelectedEntryTextBlock.Text = entry is null
+            ? UiText.Current.SelectEntryCueHint
+            : UiText.Current.EntryCueDetails(entry.Id, entry.Index, entry.CueDetails);
     }
 
     private async Task RestoreSelectedAudioAsync()
@@ -1794,10 +1811,22 @@ public sealed partial class MainWindow : Window
         public string CombinedOutput => string.Join(Environment.NewLine, new[] { Stdout, Stderr }.Where(static value => !string.IsNullOrWhiteSpace(value)));
     }
 
-    private sealed record AwbEntryViewModel(int Index, int Id, string Extension, long Size, string Name)
+    private sealed record AwbEntryViewModel(int Index, int Id, string Extension, long Size, string Name, List<string> CueNames)
     {
-        public string DisplayName => string.IsNullOrWhiteSpace(Name) ? UiText.Current.UnnamedClip : Name;
-        public string TooltipName => string.IsNullOrWhiteSpace(Name) ? UiText.Current.UnnamedClip : Name;
+        public string PrimaryCue => FirstCueOrTechnicalId();
+        public string CueReferenceSummary => CueNames.Count.ToString(CultureInfo.InvariantCulture);
+        public string CueTooltip => CueDetails;
+        public string CueDetails => CueNames.Count == 0 ? $"AWB ID {Id}" : string.Join(Environment.NewLine, CueNames);
+
+        private string FirstCueOrTechnicalId()
+        {
+            if (!string.IsNullOrWhiteSpace(Name))
+            {
+                return Name;
+            }
+
+            return CueNames.FirstOrDefault(static name => !string.IsNullOrWhiteSpace(name)) ?? $"AWB ID {Id}";
+        }
     }
 
     private sealed record ReplacementJob(string SelectorMode, int Entry, string AudioPath, int LoopMode, int LoopStart, int LoopEnd)
@@ -1820,21 +1849,21 @@ public sealed partial class MainWindow : Window
         private static UiText Spanish { get; } = new()
         {
             Subtitle = "Reemplazo de audio ACB/AWB mediante backend Python",
-            Files = "Archivos",
+            Files = "1. Banco",
             Bank = "ACB/AWB",
             Browse = "Examinar",
-            Changes = "Cambios",
+            Changes = "2. Sustituciones",
             ReadEntries = "Leer entradas AWB",
             PlayEntry = "Reproducir entrada",
             Replace = "Sustituir",
             Remove = "Quitar",
             Clear = "Limpiar",
-            Loop = "Loop",
+            Loop = "3. Loop",
             UseSmpl = "Usar smpl",
             KeepHca = "Conservar HCA generado junto al AWB",
             KeepReports = "Conservar reports/logs de exportación",
             UseModSuffix = "Añadir sufijo .mod",
-            Export = "Export",
+            Export = "4. Exportar ACB/AWB",
             Entries = "Entradas AWB",
             Operation = "Operación",
             AcbWatermark = "Banco .acb",
@@ -1846,8 +1875,9 @@ public sealed partial class MainWindow : Window
             Id = "ID",
             Type = "Tipo",
             Size = "Tamaño",
-            Clip = "Clip",
-            UnnamedClip = "Sin nombre",
+            PrimaryCue = "Cue principal",
+            CueRefs = "Refs.",
+            SelectEntryCueHint = "Selecciona una entrada para ver todos los cues asociados.",
             AutoWavSmpl = "Auto WAV smpl",
             Manual = "Manual",
             NoLoop = "Sin loop",
@@ -1864,21 +1894,21 @@ public sealed partial class MainWindow : Window
         private static UiText English { get; } = new()
         {
             Subtitle = "ACB/AWB audio replacement through the Python backend",
-            Files = "Files",
+            Files = "1. Bank",
             Bank = "ACB/AWB",
             Browse = "Browse",
-            Changes = "Changes",
+            Changes = "2. Replacements",
             ReadEntries = "Read AWB entries",
             PlayEntry = "Play entry",
             Replace = "Replace",
             Remove = "Remove",
             Clear = "Clear",
-            Loop = "Loop",
+            Loop = "3. Loop",
             UseSmpl = "Use smpl",
             KeepHca = "Keep generated HCA next to the AWB",
             KeepReports = "Keep export reports/logs",
             UseModSuffix = "Append .mod suffix",
-            Export = "Export",
+            Export = "4. Export ACB/AWB",
             Entries = "AWB Entries",
             Operation = "Operation",
             AcbWatermark = ".acb bank",
@@ -1890,8 +1920,9 @@ public sealed partial class MainWindow : Window
             Id = "ID",
             Type = "Type",
             Size = "Size",
-            Clip = "Clip",
-            UnnamedClip = "Unnamed",
+            PrimaryCue = "Primary cue",
+            CueRefs = "Refs.",
+            SelectEntryCueHint = "Select an entry to see every associated cue.",
             AutoWavSmpl = "Auto WAV smpl",
             Manual = "Manual",
             NoLoop = "No loop",
@@ -1932,8 +1963,9 @@ public sealed partial class MainWindow : Window
         public string Id { get; init; } = "";
         public string Type { get; init; } = "";
         public string Size { get; init; } = "";
-        public string Clip { get; init; } = "";
-        public string UnnamedClip { get; init; } = "";
+        public string PrimaryCue { get; init; } = "";
+        public string CueRefs { get; init; } = "";
+        public string SelectEntryCueHint { get; init; } = "";
         public string AutoWavSmpl { get; init; } = "";
         public string Manual { get; init; } = "";
         public string NoLoop { get; init; } = "";
@@ -1947,6 +1979,9 @@ public sealed partial class MainWindow : Window
         public string OutputMatchesSource { get; init; } = "";
 
         public string AudioMissing(string path) => $"{AudioMissingPrefix}: {path}";
+        public string EntryCueDetails(int id, int index, string cueDetails) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase)
+            ? $"ID AWB {id} / índice {index}{Environment.NewLine}{cueDetails}"
+            : $"AWB ID {id} / index {index}{Environment.NewLine}{cueDetails}";
     }
 
     private sealed class UserPreferences
@@ -1977,6 +2012,8 @@ public sealed partial class MainWindow : Window
         public long Size { get; set; }
         public string? Extension { get; set; }
         public string? Name { get; set; }
+        [JsonPropertyName("cue_names")]
+        public List<string>? CueNames { get; set; }
     }
 
     private sealed class WavInfo

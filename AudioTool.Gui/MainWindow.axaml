@@ -22,7 +22,7 @@
       <Border Grid.Column="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="12">
-          <TextBlock x:Name="FilesHeaderTextBlock" Text="Archivos" FontWeight="SemiBold" />
+          <TextBlock x:Name="FilesHeaderTextBlock" Text="1. Banco" FontWeight="SemiBold" />
 
           <StackPanel Grid.Row="1" Spacing="8">
             <TextBlock x:Name="BankLabelTextBlock" Text="ACB/AWB" Opacity="0.8" />
@@ -38,7 +38,7 @@
           <StackPanel Grid.Row="2" Spacing="12">
             <Border Padding="12" CornerRadius="8" Background="#16232424">
               <Grid RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="10">
-                <TextBlock x:Name="ChangesHeaderTextBlock" Text="Cambios" FontWeight="SemiBold" />
+                <TextBlock x:Name="ChangesHeaderTextBlock" Text="2. Sustituciones" FontWeight="SemiBold" />
                 <Grid Grid.Row="1" ColumnDefinitions="120,*" ColumnSpacing="10">
                   <ComboBox x:Name="SelectorModeComboBox" SelectedIndex="0" SelectionChanged="OnSelectorChanged">
                     <ComboBoxItem Content="ID AWB" />
@@ -97,7 +97,7 @@
 
             <Border Grid.Row="3" Padding="12" CornerRadius="8" Background="#16232424">
               <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="10">
-                <TextBlock x:Name="LoopHeaderTextBlock" Text="Loop" FontWeight="SemiBold" />
+                <TextBlock x:Name="LoopHeaderTextBlock" Text="3. Loop" FontWeight="SemiBold" />
                 <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
                   <ComboBox x:Name="LoopModeComboBox" SelectedIndex="0" SelectionChanged="OnLoopModeChanged">
                     <ComboBoxItem Content="Auto WAV smpl" />
@@ -147,9 +147,10 @@
             </Border>
 
             <Button x:Name="ExecuteButton"
-                    Content="Export"
+                    Content="4. Exportar ACB/AWB"
                     Padding="18,9"
-                    HorizontalAlignment="Left"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Center"
                     Click="OnExecuteClick" />
           </StackPanel>
         </Grid>
@@ -167,9 +168,14 @@
 
       <Grid Grid.Column="2" RowDefinitions="260,12,*">
         <Border Grid.Row="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
-          <Grid RowDefinitions="Auto,*" RowSpacing="10">
+          <Grid RowDefinitions="Auto,Auto,*" RowSpacing="10">
             <TextBlock x:Name="EntriesHeaderTextBlock" Text="Entradas AWB" FontWeight="SemiBold" />
-            <DataGrid Grid.Row="1"
+            <TextBlock Grid.Row="1"
+                       x:Name="SelectedEntryTextBlock"
+                       Text="Selecciona una entrada para ver sus cues asociados."
+                       Opacity="0.76"
+                       TextWrapping="Wrap" />
+            <DataGrid Grid.Row="2"
                       x:Name="AwbEntriesGrid"
                       RowHeight="32"
                       AutoGenerateColumns="False"
@@ -181,19 +187,20 @@
                 <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="68" />
                 <DataGridTextColumn Header="Tipo" Binding="{Binding Extension}" Width="72" />
                 <DataGridTextColumn Header="Tamaño" Binding="{Binding Size}" Width="96" />
-                <DataGridTemplateColumn Header="Clip" Width="2*">
+                <DataGridTemplateColumn Header="Cue principal" Width="2*">
                   <DataGridTemplateColumn.CellTemplate>
                     <DataTemplate>
                       <Border ClipToBounds="True">
-                        <TextBlock Text="{Binding DisplayName}"
+                        <TextBlock Text="{Binding PrimaryCue}"
                                    TextTrimming="CharacterEllipsis"
                                    TextWrapping="NoWrap"
                                    VerticalAlignment="Center"
-                                   ToolTip.Tip="{Binding TooltipName}" />
+                                   ToolTip.Tip="{Binding CueTooltip}" />
                       </Border>
                     </DataTemplate>
                   </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
+                <DataGridTextColumn Header="Refs." Binding="{Binding CueReferenceSummary}" Width="72" />
               </DataGrid.Columns>
             </DataGrid>
           </Grid>
