@@ -1374,6 +1374,52 @@ def cmd_wav_info(args: argparse.Namespace) -> None:
     print(json.dumps(audio_info(source), ensure_ascii=False, indent=2))
 
 
+def cmd_clip_audio(args: argparse.Namespace) -> None:
+    source = Path(args.source)
+    target = Path(args.output)
+    if args.sample_rate <= 0:
+        raise ValueError("sample-rate must be positive")
+    if args.start_sample < 0 or args.end_sample <= args.start_sample:
+        raise ValueError("Invalid clip range")
+
+    ffmpeg_path, ffmpeg_source = resolve_ffmpeg(download=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    start_seconds = args.start_sample / args.sample_rate
+    duration_seconds = (args.end_sample - args.start_sample) / args.sample_rate
+    subprocess.run(
+        [
+            ffmpeg_path,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            f"{start_seconds:.9f}",
+            "-i",
+            str(source),
+            "-t",
+            f"{duration_seconds:.9f}",
+            "-vn",
+            "-acodec",
+            "pcm_s16le",
+            str(target),
+        ],
+        check=True,
+    )
+    print(json.dumps(
+        {
+            "source": str(source),
+            "output": str(target),
+            "start_sample": args.start_sample,
+            "end_sample": args.end_sample,
+            "sample_rate": args.sample_rate,
+            "ffmpeg": {"path": ffmpeg_path, "source": ffmpeg_source},
+        },
+        ensure_ascii=False,
+        indent=2,
+    ))
+
+
 def cmd_ensure_plugins(args: argparse.Namespace) -> None:
     checks: list[dict[str, Any]] = []
 
@@ -1969,6 +2015,14 @@ def build_parser() -> argparse.ArgumentParser:
     wav_info_parser = subparsers.add_parser("wav-info", help="Read WAV duration and first smpl loop.")
     wav_info_parser.add_argument("source")
     wav_info_parser.set_defaults(func=cmd_wav_info)
+
+    clip_audio_parser = subparsers.add_parser("clip-audio", help="Write a WAV clip for playback.")
+    clip_audio_parser.add_argument("source")
+    clip_audio_parser.add_argument("--output", required=True)
+    clip_audio_parser.add_argument("--start-sample", type=int, required=True)
+    clip_audio_parser.add_argument("--end-sample", type=int, required=True)
+    clip_audio_parser.add_argument("--sample-rate", type=int, required=True)
+    clip_audio_parser.set_defaults(func=cmd_clip_audio)
 
     plugins_parser = subparsers.add_parser("ensure-plugins", help="Verify and integrate preview/transcode helper tools.")
     plugins_parser.add_argument("--vgmstream", help="Path to vgmstream-cli.")

@@ -11,14 +11,10 @@
         DragDrop.AllowDrop="True">
   <Grid Margin="18" RowDefinitions="Auto,*" RowSpacing="14">
     <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="16">
-      <StackPanel Spacing="4">
-        <StackPanel Orientation="Horizontal" Spacing="10">
-          <TextBlock Text="L5 Audio Tool" FontSize="28" FontWeight="Bold" />
-          <TextBlock x:Name="VersionTextBlock" VerticalAlignment="Center" Opacity="0.68" />
-        </StackPanel>
-        <TextBlock x:Name="SubtitleTextBlock"
-                   Text="Prepara cambios de audio para bancos ACB/AWB"
-                   Opacity="0.72" />
+      <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+        <TextBlock Text="L5 Audio Tool" FontSize="28" FontWeight="Bold" />
+        <TextBlock x:Name="VersionTextBlock" VerticalAlignment="Center" Opacity="0.68" />
+        <TextBlock x:Name="SubtitleTextBlock" IsVisible="False" />
       </StackPanel>
 
       <Button x:Name="ExecuteButton"
@@ -103,7 +99,7 @@
                     Click="OnInspectAwbClick" />
             <Button x:Name="PreviewEntryButton"
                     Grid.Column="2"
-                    Content="Reproducir entrada"
+                    Content="Reproducir"
                     Click="OnPreviewEntryClick" />
           </Grid>
 
@@ -180,16 +176,20 @@
         <Border Grid.Row="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
           <StackPanel Spacing="10">
             <TextBlock x:Name="LoopHeaderTextBlock" Text="3. Loop" FontWeight="SemiBold" />
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
               <ComboBox x:Name="LoopModeComboBox" SelectedIndex="0" SelectionChanged="OnLoopModeChanged">
-                <ComboBoxItem Content="Loop detectado" />
+                <ComboBoxItem Content="Loop del archivo" />
                 <ComboBoxItem Content="Manual" />
                 <ComboBoxItem Content="Sin loop" />
               </ComboBox>
               <Button x:Name="UseWavLoopButton"
                       Grid.Column="1"
-                      Content="Usar smpl"
+                      Content="Usar loop detectado"
                       Click="OnUseWavLoopClick" />
+              <Button x:Name="PreviewLoopButton"
+                      Grid.Column="2"
+                      Content="Reproducir loop"
+                      Click="OnPreviewLoopClick" />
             </Grid>
             <TextBlock x:Name="LoopSummaryTextBlock"
                        Text="Carga un WAV para ver duración y loop."
@@ -198,13 +198,13 @@
             <Grid ColumnDefinitions="44,*" ColumnSpacing="10">
               <Button x:Name="PlaybackButton"
                       Width="40"
-                      Height="58"
+                      Height="74"
                       Content="▶"
                       FontSize="16"
                       Click="OnPlaybackToggleClick" />
               <local:PlaybackTimeline Grid.Column="1"
                                       x:Name="LoopTimeline"
-                                      Height="58"
+                                      Height="74"
                                       PointerPressed="OnLoopTimelinePointerPressed"
                                       PointerMoved="OnLoopTimelinePointerMoved"
                                       PointerReleased="OnLoopTimelinePointerReleased"

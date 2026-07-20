@@ -7,6 +7,8 @@ namespace Level5.AudioTool.Gui;
 
 public sealed class PlaybackTimeline : Control
 {
+    public const double RulerHeight = 24;
+
     public static readonly StyledProperty<int> TotalSamplesProperty =
         AvaloniaProperty.Register<PlaybackTimeline, int>(nameof(TotalSamples));
 
@@ -95,7 +97,7 @@ public sealed class PlaybackTimeline : Control
             return;
         }
 
-        var rulerHeight = 14.0;
+        var rulerHeight = RulerHeight;
         var clipTop = rulerHeight + 2;
         var clipHeight = Math.Max(16, height - clipTop - 2);
         var clipRect = new Rect(0.5, clipTop, Math.Max(0, width - 1), clipHeight);

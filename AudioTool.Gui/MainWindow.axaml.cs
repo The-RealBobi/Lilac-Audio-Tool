@@ -40,6 +40,8 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer _playbackTimer;
     private TimeSpan _playbackOffset;
     private DateTime _playbackStartedAt;
+    private int _playbackBaseSample;
+    private int _playbackEndSample;
     private TimelineDragMode _timelineDragMode = TimelineDragMode.None;
 
     public MainWindow()
@@ -66,7 +68,7 @@ public sealed partial class MainWindow : Window
         AppendLog(UiText.Current.AudioRoot(_audioRoot));
         AppendLog(UiText.Current.DataRoot(_dataRoot));
         AppendLog(UiText.Current.PreferencesPath(_preferencesPath));
-        _ = RestoreSelectedAudioAsync();
+        _ = RestorePreviousSessionAsync();
         _ = EnsurePluginsAsync();
     }
 
@@ -87,6 +89,7 @@ public sealed partial class MainWindow : Window
         ClearReplacementsButton.Content = strings.Clear;
         LoopHeaderTextBlock.Text = strings.Loop;
         UseWavLoopButton.Content = strings.UseSmpl;
+        PreviewLoopButton.Content = strings.PreviewLoop;
         KeepHcaCheckBox.Content = strings.KeepHca;
         KeepReportsCheckBox.Content = strings.KeepReports;
         UseModSuffixCheckBox.Content = strings.UseModSuffix;
@@ -707,6 +710,25 @@ public sealed partial class MainWindow : Window
         UpdateCommandPreview();
     }
 
+    private async void OnPreviewLoopClick(object? sender, RoutedEventArgs e)
+    {
+        if (_wavSamples <= 0)
+        {
+            AppendLog(UiText.Current.SelectAudioToPlay);
+            return;
+        }
+
+        var start = (int)(LoopStartBox.Value ?? 0);
+        var end = (int)(LoopEndBox.Value ?? _wavSamples);
+        if (LoopModeComboBox.SelectedIndex == 2 || start < 0 || end <= start || end > _wavSamples)
+        {
+            AppendLog(UiText.Current.InvalidLoopRange);
+            return;
+        }
+
+        await PlaySampleRangeAsync(start, end);
+    }
+
     private void OnLoopNumberChanged(object? sender, NumericUpDownValueChangedEventArgs e)
     {
         if (!_uiReady || _updatingLoopControls)
@@ -730,15 +752,23 @@ public sealed partial class MainWindow : Window
         UpdateLoopVisuals();
     }
 
-    private void OnLoopTimelinePointerPressed(object? sender, PointerPressedEventArgs e)
+    private async void OnLoopTimelinePointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (_wavSamples <= 0)
         {
             return;
         }
 
-        var x = e.GetPosition(LoopTimeline).X;
+        var position = e.GetPosition(LoopTimeline);
+        var x = position.X;
         var sample = LoopTimeline.XToSample(x);
+        if (position.Y > PlaybackTimeline.RulerHeight)
+        {
+            _timelineDragMode = TimelineDragMode.None;
+            await PlaySampleRangeAsync(sample, _wavSamples);
+            return;
+        }
+
         if (LoopModeComboBox.SelectedIndex == 2)
         {
             LoopModeComboBox.SelectedIndex = 1;
@@ -1205,6 +1235,8 @@ public sealed partial class MainWindow : Window
     {
         StopPlayback();
         _playerSourcePath = path;
+        _playbackBaseSample = 0;
+        _playbackEndSample = _wavSamples;
         _playbackOffset = TimeSpan.Zero;
         UpdatePlaybackVisuals();
         PlaybackButton.Content = "▶";
@@ -1217,14 +1249,65 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        StartPlayback(_playerSourcePath, 0, _wavSamples);
+    }
+
+    private async Task PlaySampleRangeAsync(int startSample, int endSample)
+    {
+        if (string.IsNullOrWhiteSpace(_playerSourcePath) || !File.Exists(_playerSourcePath))
+        {
+            return;
+        }
+
+        if (_wavSamples <= 0 || _wavSampleRate <= 0)
+        {
+            StartPlayback();
+            return;
+        }
+
+        startSample = Math.Clamp(startSample, 0, Math.Max(0, _wavSamples - 1));
+        endSample = Math.Clamp(endSample, startSample + 1, _wavSamples);
         StopPlayback();
-        if (!TryStartControlledPlayback(_playerSourcePath, out var error))
+        var clipDirectory = Path.Combine(_dataRoot, "work", "playback");
+        var clipPath = Path.Combine(clipDirectory, "preview_range.wav");
+        var result = await RunPythonAsync([
+            "clip-audio",
+            _playerSourcePath,
+            "--output",
+            clipPath,
+            "--start-sample",
+            startSample.ToString(CultureInfo.InvariantCulture),
+            "--end-sample",
+            endSample.ToString(CultureInfo.InvariantCulture),
+            "--sample-rate",
+            _wavSampleRate.ToString(CultureInfo.InvariantCulture)
+        ]);
+        if (result.ExitCode != 0)
+        {
+            AppendLog(result.CombinedOutput);
+            return;
+        }
+
+        StartPlayback(clipPath, startSample, endSample);
+    }
+
+    private void StartPlayback(string path, int baseSample, int endSample)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return;
+        }
+
+        StopPlayback();
+        _playbackBaseSample = Math.Clamp(baseSample, 0, Math.Max(0, _wavSamples));
+        _playbackEndSample = Math.Clamp(endSample <= baseSample ? _wavSamples : endSample, _playbackBaseSample, Math.Max(_playbackBaseSample, _wavSamples));
+        if (!TryStartControlledPlayback(path, out var error))
         {
             if (!string.IsNullOrWhiteSpace(error))
             {
                 AppendLog(error);
             }
-            OpenWithSystemPlayer(_playerSourcePath);
+            OpenWithSystemPlayer(path);
             return;
         }
 
@@ -1293,6 +1376,8 @@ public sealed partial class MainWindow : Window
         }
 
         _playbackOffset = TimeSpan.Zero;
+        _playbackBaseSample = 0;
+        _playbackEndSample = _wavSamples;
         if (PlaybackButton is not null)
         {
             PlaybackButton.Content = "▶";
@@ -1324,9 +1409,10 @@ public sealed partial class MainWindow : Window
 
     private TimeSpan AudioDuration()
     {
-        return _wavSampleRate <= 0 || _wavSamples <= 0
+        var sampleCount = _playbackEndSample > _playbackBaseSample ? _playbackEndSample - _playbackBaseSample : _wavSamples;
+        return _wavSampleRate <= 0 || sampleCount <= 0
             ? TimeSpan.Zero
-            : TimeSpan.FromSeconds(_wavSamples / (double)_wavSampleRate);
+            : TimeSpan.FromSeconds(sampleCount / (double)_wavSampleRate);
     }
 
     private void UpdatePlaybackVisuals()
@@ -1339,7 +1425,8 @@ public sealed partial class MainWindow : Window
         var duration = AudioDuration();
         var progress = duration <= TimeSpan.Zero ? 0 : CurrentPlaybackPosition().TotalSeconds / duration.TotalSeconds;
         progress = Math.Clamp(progress, 0, 1);
-        LoopTimeline.PlayheadSample = _wavSamples <= 0 ? 0 : (int)Math.Round(_wavSamples * progress);
+        var span = _playbackEndSample > _playbackBaseSample ? _playbackEndSample - _playbackBaseSample : _wavSamples;
+        LoopTimeline.PlayheadSample = _wavSamples <= 0 ? 0 : Math.Clamp(_playbackBaseSample + (int)Math.Round(span * progress), 0, _wavSamples);
     }
 
     private string DescribeLoop()
@@ -1515,6 +1602,16 @@ public sealed partial class MainWindow : Window
         SelectedEntryTextBlock.Text = entry is null
             ? UiText.Current.SelectEntryCueHint
             : UiText.Current.EntryCueDetails(entry.Id, entry.Index, entry.CueDetails);
+    }
+
+    private async Task RestorePreviousSessionAsync()
+    {
+        if (File.Exists(AcbPathTextBox.Text) && File.Exists(AwbPathTextBox.Text))
+        {
+            await InspectAwbAsync();
+        }
+
+        await RestoreSelectedAudioAsync();
     }
 
     private async Task RestoreSelectedAudioAsync()
@@ -1872,12 +1969,13 @@ public sealed partial class MainWindow : Window
             Browse = "Examinar",
             Changes = "2. Entrada",
             ReadEntries = "Leer entradas AWB",
-            PlayEntry = "Escuchar",
+            PlayEntry = "Reproducir",
             Replace = "Sustituir",
             Remove = "Quitar",
             Clear = "Limpiar",
             Loop = "3. Reproductor y loop",
-            UseSmpl = "Usar smpl",
+            UseSmpl = "Usar loop detectado",
+            PreviewLoop = "Reproducir loop",
             KeepHca = "Guardar audio codificado junto al AWB",
             KeepReports = "Guardar informes de exportación",
             UseModSuffix = "Añadir sufijo .mod",
@@ -1899,7 +1997,7 @@ public sealed partial class MainWindow : Window
             CueRefs = "Usos",
             SelectEntryCueHint = "Selecciona una entrada para ver sus nombres asociados.",
             NoResolvedName = "Nombre no resuelto en el ACB cargado",
-            AutoWavSmpl = "Loop detectado",
+            AutoWavSmpl = "Loop del archivo",
             Manual = "Manual",
             NoLoop = "Sin loop",
             AudioMissingPrefix = "No existe el archivo en cola",
@@ -1913,9 +2011,9 @@ public sealed partial class MainWindow : Window
             Unknown = "desconocido",
             PluginCheckFailed = "No se pudieron comprobar las herramientas de audio.",
             SelectAwbBeforeInspect = "Selecciona un AWB antes de leer las entradas.",
-            SelectAwbBeforePreview = "Selecciona un AWB antes de escuchar una entrada.",
-            PreviewFailed = "No se pudo preparar la entrada para escucharla.",
-            SelectAudioToPlay = "Selecciona una entrada o un audio de la cola para escucharlo.",
+            SelectAwbBeforePreview = "Selecciona un AWB antes de reproducir una entrada.",
+            PreviewFailed = "No se pudo preparar la entrada para reproducirla.",
+            SelectAudioToPlay = "Selecciona una entrada o un audio de la cola para reproducirlo.",
             AddReplacementRequired = "Añade al menos un reemplazo.",
             UpdatingBankInfo = "Actualizando datos del banco...",
             PickReplacementAudioTitle = "Seleccionar audio de reemplazo",
@@ -1947,12 +2045,13 @@ public sealed partial class MainWindow : Window
             Browse = "Browse",
             Changes = "2. Entry",
             ReadEntries = "Read AWB entries",
-            PlayEntry = "Listen",
+            PlayEntry = "Play",
             Replace = "Replace",
             Remove = "Remove",
             Clear = "Clear",
             Loop = "3. Player and loop",
-            UseSmpl = "Use smpl",
+            UseSmpl = "Use detected loop",
+            PreviewLoop = "Play loop",
             KeepHca = "Keep encoded audio next to the AWB",
             KeepReports = "Keep export reports",
             UseModSuffix = "Append .mod suffix",
@@ -1974,7 +2073,7 @@ public sealed partial class MainWindow : Window
             CueRefs = "Uses",
             SelectEntryCueHint = "Select an entry to see its associated names.",
             NoResolvedName = "No name resolved from the loaded ACB",
-            AutoWavSmpl = "Detected loop",
+            AutoWavSmpl = "File loop",
             Manual = "Manual",
             NoLoop = "No loop",
             AudioMissingPrefix = "Queued file does not exist",
@@ -1988,9 +2087,9 @@ public sealed partial class MainWindow : Window
             Unknown = "unknown",
             PluginCheckFailed = "Audio tools could not be checked.",
             SelectAwbBeforeInspect = "Select an AWB before reading entries.",
-            SelectAwbBeforePreview = "Select an AWB before listening to an entry.",
+            SelectAwbBeforePreview = "Select an AWB before playing an entry.",
             PreviewFailed = "The entry could not be prepared for playback.",
-            SelectAudioToPlay = "Select an entry or queued audio to listen to it.",
+            SelectAudioToPlay = "Select an entry or queued audio to play it.",
             AddReplacementRequired = "Add at least one replacement.",
             UpdatingBankInfo = "Updating bank data...",
             PickReplacementAudioTitle = "Select replacement audio",
@@ -2000,7 +2099,7 @@ public sealed partial class MainWindow : Window
             InvalidLoopRange = "The manual loop range is invalid.",
             ReadEntriesBeforeIndexPatch = "Read the AWB entries before using index mode.",
             BankPairMissing = "No matching ACB/AWB pair was found next to the selected file.",
-            AudioEmptySummary = "Load or listen to audio to see duration and loop data.",
+            AudioEmptySummary = "Load or play audio to see duration and loop data.",
             NoLoopLower = "no loop",
             PlayerStartFailed = "The built-in player could not be started.",
             PlayerCannotPlay = "The built-in player could not play that file.",
@@ -2026,6 +2125,7 @@ public sealed partial class MainWindow : Window
         public string Clear { get; init; } = "";
         public string Loop { get; init; } = "";
         public string UseSmpl { get; init; } = "";
+        public string PreviewLoop { get; init; } = "";
         public string KeepHca { get; init; } = "";
         public string KeepReports { get; init; } = "";
         public string UseModSuffix { get; init; } = "";
@@ -2093,7 +2193,7 @@ public sealed partial class MainWindow : Window
         public string PluginAvailable(string name, string source, string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Herramienta lista: {name} ({source}) {path}" : $"Tool ready: {name} ({source}) {path}";
         public string PluginUnavailable(string name, string error) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Herramienta no disponible: {name}. {error}" : $"Tool unavailable: {name}. {error}";
         public string AwbInspected(int count) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Entradas leídas: {count}." : $"Entries read: {count}.";
-        public string PreviewReady(string decoder, string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Listo para escuchar ({decoder}): {path}" : $"Ready to listen ({decoder}): {path}";
+        public string PreviewReady(string decoder, string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Listo para reproducir ({decoder}): {path}" : $"Ready to play ({decoder}): {path}";
         public string BuildingAwb(int current, int total, string label) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Generando audio ({current}/{total}): {label}" : $"Building audio ({current}/{total}): {label}";
         public string PatchingBank(int current, int total) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Actualizando banco ({current}/{total})..." : $"Updating bank ({current}/{total})...";
         public string Done(string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Listo: {path}" : $"Done: {path}";
