@@ -292,14 +292,22 @@ public sealed partial class MainWindow : Window
         await RunBusyAsync(async () =>
         {
             Directory.CreateDirectory(previewDirectory);
-            var result = await RunPythonAsync([
+            var previewArgs = new List<string>
+            {
                 "preview-awb-entry",
                 AwbPathTextBox.Text!,
                 "--output",
                 previewDirectory,
                 selectorMode,
                 selectorValue
-            ]);
+            };
+            if (!string.IsNullOrWhiteSpace(AcbPathTextBox.Text) && File.Exists(AcbPathTextBox.Text))
+            {
+                previewArgs.Add("--acb");
+                previewArgs.Add(AcbPathTextBox.Text!);
+            }
+
+            var result = await RunPythonAsync(previewArgs);
             if (result.ExitCode != 0)
             {
                 AppendLog(result.CombinedOutput);
@@ -314,6 +322,7 @@ public sealed partial class MainWindow : Window
             }
 
             await LoadWavInfoAsync(preview.Wav);
+            ApplyPreviewLoop(preview);
             SetPlayerSource(preview.Wav);
             var decoder = string.IsNullOrWhiteSpace(preview.Decoder) ? UiText.Current.Unknown : preview.Decoder;
             AppendLog(UiText.Current.PreviewReady(decoder, preview.Wav));
@@ -322,6 +331,30 @@ public sealed partial class MainWindow : Window
                 StartPlayback();
             }
         });
+    }
+
+    private void ApplyPreviewLoop(PreviewReport preview)
+    {
+        if (preview.Loop is null || _wavSamples <= 0)
+        {
+            return;
+        }
+
+        var start = preview.Loop.Start;
+        var end = preview.Loop.End;
+        start = Math.Clamp(start, 0, Math.Max(0, _wavSamples - 1));
+        end = Math.Clamp(end, start + 1, _wavSamples);
+        _wavLoopStart = start;
+        _wavLoopEnd = end;
+
+        _updatingLoopControls = true;
+        LoopStartBox.Value = start;
+        LoopEndBox.Value = end;
+        _updatingLoopControls = false;
+
+        LoopModeComboBox.SelectedIndex = 0;
+        SetLoopEnabled(true);
+        UpdateLoopVisuals();
     }
 
     private async void OnPlaybackToggleClick(object? sender, RoutedEventArgs e)
@@ -2335,6 +2368,12 @@ public sealed partial class MainWindow : Window
         public string? Wav { get; set; }
         [JsonPropertyName("decoder")]
         public string? Decoder { get; set; }
+        [JsonPropertyName("loop")]
+        public WavLoop? Loop { get; set; }
+        [JsonPropertyName("sample_count")]
+        public int? SampleCount { get; set; }
+        [JsonPropertyName("sample_rate")]
+        public int? SampleRate { get; set; }
     }
 
     private sealed class PreparedWavInfo

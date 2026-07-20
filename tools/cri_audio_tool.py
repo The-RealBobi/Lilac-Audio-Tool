@@ -446,6 +446,61 @@ def acb_awb_clip_names(acb_data: bytes) -> dict[int, str]:
     }
 
 
+def acb_awb_entry_info(acb_data: bytes, awb_id: int) -> dict[str, Any] | None:
+    table = parse_utf(acb_data)
+    nested = table.nested_tables()
+    waveform_table = nested.get("WaveformTable")
+    if waveform_table is None:
+        return None
+
+    extension_table = nested.get("WaveformExtensionDataTable")
+    for waveform_index, row in enumerate(waveform_table.rows):
+        stream_id = int_value(row, "StreamAwbId")
+        memory_id = int_value(row, "MemoryAwbId")
+        if stream_id != awb_id and memory_id != awb_id:
+            continue
+
+        loop_start = None
+        loop_end = None
+        loop_source = None
+        extension_index = int_value(row, "ExtensionData")
+        if (
+            extension_table is not None and
+            extension_index is not None and
+            extension_index != 0xFFFF and
+            0 <= extension_index < len(extension_table.rows)
+        ):
+            extension_row = extension_table.rows[extension_index]
+            loop_start = int_value(extension_row, "LoopStart")
+            loop_end = int_value(extension_row, "LoopEnd")
+            if loop_start is not None and loop_end is not None and loop_end > loop_start:
+                loop_source = "acb"
+
+        loop_flag = int_value(row, "LoopFlag")
+        if loop_flag is not None and loop_flag != 2:
+            loop_start = None
+            loop_end = None
+            loop_source = None
+
+        return {
+            "waveform_index": waveform_index,
+            "stream_awb_id": stream_id,
+            "memory_awb_id": memory_id,
+            "loop_flag": loop_flag,
+            "sample_count": int_value(row, "NumSamples"),
+            "sample_rate": int_value(row, "SamplingRate"),
+            "channels": int_value(row, "NumChannels"),
+            "encode_type": int_value(row, "EncodeType"),
+            "loop": {
+                "start": loop_start,
+                "end": loop_end,
+                "source": loop_source,
+            } if loop_source is not None else None,
+        }
+
+    return None
+
+
 class UtfField:
     def __init__(self, name: str, raw_type: int, value: Any, offset: int, size: int):
         self.name = name
@@ -631,7 +686,7 @@ def field_by_name(row: list[UtfField], name: str) -> UtfField | None:
 
 def int_value(row: list[UtfField], name: str) -> int | None:
     field = field_by_name(row, name)
-    if isinstance(field.value, int):
+    if field is not None and isinstance(field.value, int):
         return field.value
     return None
 
@@ -1499,6 +1554,7 @@ def cmd_preview_awb_entry(args: argparse.Namespace) -> None:
     output = Path(args.output)
     archive = parse_awb(read_cri(source))
     entry = select_awb_entry(archive, args.id, args.index)
+    acb_entry = acb_awb_entry_info(read_cri(Path(args.acb)), entry.id) if args.acb else None
     output.mkdir(parents=True, exist_ok=True)
 
     entry_path = output / f"{source.stem}_{entry.index:04d}_{entry.id:05d}{entry.extension}"
@@ -1566,6 +1622,10 @@ def cmd_preview_awb_entry(args: argparse.Namespace) -> None:
             "extracted": str(entry_path),
             "wav": str(wav_path),
             "decoder": decoder,
+            "acb_entry": acb_entry,
+            "loop": acb_entry.get("loop") if acb_entry else None,
+            "sample_count": acb_entry.get("sample_count") if acb_entry else None,
+            "sample_rate": acb_entry.get("sample_rate") if acb_entry else None,
         },
         ensure_ascii=False,
         indent=2,
@@ -2041,6 +2101,7 @@ def build_parser() -> argparse.ArgumentParser:
     preview_parser.add_argument("--output", required=True)
     preview_parser.add_argument("--id", type=lambda value: int(value, 0))
     preview_parser.add_argument("--index", type=lambda value: int(value, 0))
+    preview_parser.add_argument("--acb", help="Optional ACB used to restore original entry metadata in previews.")
     preview_parser.add_argument("--hca-tool", help="Path to CriHcaTool.csproj.")
     preview_parser.add_argument("--vgmstream", help="Path to vgmstream-cli.")
     preview_parser.set_defaults(func=cmd_preview_awb_entry)
