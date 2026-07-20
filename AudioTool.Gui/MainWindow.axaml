@@ -17,7 +17,7 @@
           <TextBlock x:Name="VersionTextBlock" VerticalAlignment="Center" Opacity="0.68" />
         </StackPanel>
         <TextBlock x:Name="SubtitleTextBlock"
-                   Text="Reemplazo de audio ACB/AWB mediante backend Python"
+                   Text="Prepara cambios de audio para bancos ACB/AWB"
                    Opacity="0.72" />
       </StackPanel>
 
@@ -91,10 +91,10 @@
               <StackPanel Spacing="10">
                 <TextBlock x:Name="ExportOptionsHeaderTextBlock" Text="Opciones de exportación" FontWeight="SemiBold" />
                 <CheckBox x:Name="KeepHcaCheckBox"
-                          Content="Conservar HCA generado junto al AWB"
+                          Content="Guardar audio codificado junto al AWB"
                           IsChecked="True" />
                 <CheckBox x:Name="KeepReportsCheckBox"
-                          Content="Conservar reports/logs de exportación"
+                          Content="Guardar informes de exportación"
                           IsChecked="False" />
                 <CheckBox x:Name="UseModSuffixCheckBox"
                           Content="Añadir sufijo .mod"
@@ -133,7 +133,7 @@
 
           <Border Grid.Row="1" Padding="10" CornerRadius="6" Background="#14282929">
             <TextBlock x:Name="SelectedEntryTextBlock"
-                       Text="Selecciona una entrada para ver sus cues asociados."
+                       Text="Selecciona una entrada para ver sus nombres asociados."
                        TextWrapping="Wrap" />
           </Border>
 
@@ -149,7 +149,7 @@
               <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="64" />
               <DataGridTextColumn Header="Tipo" Binding="{Binding Extension}" Width="70" />
               <DataGridTextColumn Header="Tamaño" Binding="{Binding Size}" Width="92" />
-              <DataGridTemplateColumn Header="Cue principal" Width="2*">
+              <DataGridTemplateColumn Header="Nombre" Width="2*">
                 <DataGridTemplateColumn.CellTemplate>
                   <DataTemplate>
                     <Border ClipToBounds="True">
@@ -162,7 +162,7 @@
                   </DataTemplate>
                 </DataGridTemplateColumn.CellTemplate>
               </DataGridTemplateColumn>
-              <DataGridTextColumn Header="Refs." Binding="{Binding CueReferenceSummary}" Width="64" />
+              <DataGridTextColumn Header="Usos" Binding="{Binding CueReferenceSummary}" Width="64" />
             </DataGrid.Columns>
           </DataGrid>
         </Grid>
@@ -183,7 +183,7 @@
             <TextBlock x:Name="LoopHeaderTextBlock" Text="3. Loop" FontWeight="SemiBold" />
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
               <ComboBox x:Name="LoopModeComboBox" SelectedIndex="0" SelectionChanged="OnLoopModeChanged">
-                <ComboBoxItem Content="Auto WAV smpl" />
+                <ComboBoxItem Content="Loop detectado" />
                 <ComboBoxItem Content="Manual" />
                 <ComboBoxItem Content="Sin loop" />
               </ComboBox>

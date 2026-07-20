@@ -1818,7 +1818,7 @@ public sealed partial class MainWindow : Window
         public string PrimaryCue => FirstCueOrTechnicalId();
         public string CueReferenceSummary => CueNames.Count.ToString(CultureInfo.InvariantCulture);
         public string CueTooltip => CueDetails;
-        public string CueDetails => CueNames.Count == 0 ? $"AWB ID {Id}" : string.Join(Environment.NewLine, CueNames);
+        public string CueDetails => CueNames.Count == 0 ? UiText.Current.NoResolvedName : string.Join(Environment.NewLine, CueNames);
 
         private string FirstCueOrTechnicalId()
         {
@@ -1827,7 +1827,7 @@ public sealed partial class MainWindow : Window
                 return Name;
             }
 
-            return CueNames.FirstOrDefault(static name => !string.IsNullOrWhiteSpace(name)) ?? $"AWB ID {Id}";
+            return CueNames.FirstOrDefault(static name => !string.IsNullOrWhiteSpace(name)) ?? UiText.Current.NoResolvedName;
         }
     }
 
@@ -1850,7 +1850,7 @@ public sealed partial class MainWindow : Window
 
         private static UiText Spanish { get; } = new()
         {
-            Subtitle = "Reemplazo de audio ACB/AWB mediante backend Python",
+            Subtitle = "Prepara cambios de audio para bancos ACB/AWB",
             Files = "1. Banco",
             Bank = "ACB/AWB",
             Browse = "Examinar",
@@ -1862,8 +1862,8 @@ public sealed partial class MainWindow : Window
             Clear = "Limpiar",
             Loop = "3. Loop",
             UseSmpl = "Usar smpl",
-            KeepHca = "Conservar HCA generado junto al AWB",
-            KeepReports = "Conservar reports/logs de exportación",
+            KeepHca = "Guardar audio codificado junto al AWB",
+            KeepReports = "Guardar informes de exportación",
             UseModSuffix = "Añadir sufijo .mod",
             ExportOptions = "Opciones de exportación",
             Export = "4. Exportar ACB/AWB",
@@ -1879,10 +1879,11 @@ public sealed partial class MainWindow : Window
             Id = "ID",
             Type = "Tipo",
             Size = "Tamaño",
-            PrimaryCue = "Cue principal",
-            CueRefs = "Refs.",
-            SelectEntryCueHint = "Selecciona una entrada para ver todos los cues asociados.",
-            AutoWavSmpl = "Auto WAV smpl",
+            PrimaryCue = "Nombre",
+            CueRefs = "Usos",
+            SelectEntryCueHint = "Selecciona una entrada para ver sus nombres asociados.",
+            NoResolvedName = "Nombre no resuelto en el ACB cargado",
+            AutoWavSmpl = "Loop detectado",
             Manual = "Manual",
             NoLoop = "Sin loop",
             AudioMissingPrefix = "No existe el archivo en cola",
@@ -1897,7 +1898,7 @@ public sealed partial class MainWindow : Window
 
         private static UiText English { get; } = new()
         {
-            Subtitle = "ACB/AWB audio replacement through the Python backend",
+            Subtitle = "Prepare audio changes for ACB/AWB banks",
             Files = "1. Bank",
             Bank = "ACB/AWB",
             Browse = "Browse",
@@ -1909,8 +1910,8 @@ public sealed partial class MainWindow : Window
             Clear = "Clear",
             Loop = "3. Loop",
             UseSmpl = "Use smpl",
-            KeepHca = "Keep generated HCA next to the AWB",
-            KeepReports = "Keep export reports/logs",
+            KeepHca = "Keep encoded audio next to the AWB",
+            KeepReports = "Keep export reports",
             UseModSuffix = "Append .mod suffix",
             ExportOptions = "Export options",
             Export = "4. Export ACB/AWB",
@@ -1926,10 +1927,11 @@ public sealed partial class MainWindow : Window
             Id = "ID",
             Type = "Type",
             Size = "Size",
-            PrimaryCue = "Primary cue",
-            CueRefs = "Refs.",
-            SelectEntryCueHint = "Select an entry to see every associated cue.",
-            AutoWavSmpl = "Auto WAV smpl",
+            PrimaryCue = "Name",
+            CueRefs = "Uses",
+            SelectEntryCueHint = "Select an entry to see its associated names.",
+            NoResolvedName = "No name resolved from the loaded ACB",
+            AutoWavSmpl = "Detected loop",
             Manual = "Manual",
             NoLoop = "No loop",
             AudioMissingPrefix = "Queued file does not exist",
@@ -1974,6 +1976,7 @@ public sealed partial class MainWindow : Window
         public string PrimaryCue { get; init; } = "";
         public string CueRefs { get; init; } = "";
         public string SelectEntryCueHint { get; init; } = "";
+        public string NoResolvedName { get; init; } = "";
         public string AutoWavSmpl { get; init; } = "";
         public string Manual { get; init; } = "";
         public string NoLoop { get; init; } = "";
@@ -1988,8 +1991,8 @@ public sealed partial class MainWindow : Window
 
         public string AudioMissing(string path) => $"{AudioMissingPrefix}: {path}";
         public string EntryCueDetails(int id, int index, string cueDetails) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase)
-            ? $"ID AWB {id} / índice {index}{Environment.NewLine}{cueDetails}"
-            : $"AWB ID {id} / index {index}{Environment.NewLine}{cueDetails}";
+            ? $"Entrada {id} / índice {index}{Environment.NewLine}{cueDetails}"
+            : $"Entry {id} / index {index}{Environment.NewLine}{cueDetails}";
     }
 
     private sealed class UserPreferences

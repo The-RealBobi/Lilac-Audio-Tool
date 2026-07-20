@@ -1414,17 +1414,26 @@ def cmd_unpack_awb(args: argparse.Namespace) -> None:
     source = Path(args.source)
     output = Path(args.output)
     archive = parse_awb(read_cri(source))
+    clip_names: dict[int, list[str]] = {}
+    if args.acb:
+        clip_names = acb_awb_clip_name_lists(read_cri(Path(args.acb)))
     output.mkdir(parents=True, exist_ok=True)
 
     extracted = []
     for entry in archive.entries:
-        filename = f"{entry.index:04d}_{entry.id:05d}{entry.extension}"
+        names = clip_names.get(entry.id, [])
+        primary_name = names[0] if names else ""
+        name_suffix = f"_{safe_name(primary_name)}" if primary_name else ""
+        filename = f"{entry.index:04d}_{entry.id:05d}{name_suffix}{entry.extension}"
         out_path = output / filename
         out_path.write_bytes(entry.data)
         extracted.append(
             {
                 "index": entry.index,
                 "id": entry.id,
+                "name": primary_name,
+                "cue_names": names,
+                "cue_count": len(names),
                 "file": filename,
                 "size": entry.size,
                 "extension": entry.extension,
@@ -1970,6 +1979,7 @@ def build_parser() -> argparse.ArgumentParser:
     unpack_parser = subparsers.add_parser("unpack-awb", help="Extract AWB entries and write a manifest.")
     unpack_parser.add_argument("source")
     unpack_parser.add_argument("--output", required=True)
+    unpack_parser.add_argument("--acb", help="Optional ACB used to name exported entries.")
     unpack_parser.set_defaults(func=cmd_unpack_awb)
 
     preview_parser = subparsers.add_parser("preview-awb-entry", help="Extract one AWB entry and decode it to WAV for preview.")
