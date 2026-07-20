@@ -1475,6 +1475,89 @@ def cmd_clip_audio(args: argparse.Namespace) -> None:
     ))
 
 
+def cmd_loop_audio(args: argparse.Namespace) -> None:
+    source = Path(args.source)
+    target = Path(args.output)
+    if args.sample_rate <= 0:
+        raise ValueError("sample-rate must be positive")
+    if args.play_start < 0 or args.loop_start < 0 or args.loop_end <= args.loop_start:
+        raise ValueError("Invalid loop range")
+    if args.play_start >= args.loop_end:
+        raise ValueError("play-start must be before loop-end")
+
+    ffmpeg_path, ffmpeg_source = resolve_ffmpeg(download=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="l5_audio_loop_") as temp_dir:
+        normalized = Path(temp_dir) / "source.wav"
+        subprocess.run(
+            [
+                ffmpeg_path,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(source),
+                "-ar",
+                str(args.sample_rate),
+                "-vn",
+                "-acodec",
+                "pcm_s16le",
+                str(normalized),
+            ],
+            check=True,
+        )
+
+        with wave.open(str(normalized), "rb") as src:
+            frame_count = src.getnframes()
+            play_start = min(args.play_start, max(0, frame_count - 1))
+            loop_start = min(args.loop_start, max(0, frame_count - 1))
+            loop_end = min(args.loop_end, frame_count)
+            if loop_end <= loop_start or play_start >= loop_end:
+                raise ValueError("Loop range is outside the decoded audio")
+
+            requested_samples = max(
+                loop_end - play_start + loop_end - loop_start,
+                int(max(1.0, args.duration_seconds) * args.sample_rate),
+            )
+            written_samples = 0
+            with wave.open(str(target), "wb") as dst:
+                dst.setparams(src.getparams())
+
+                def copy_range(start: int, end: int) -> None:
+                    nonlocal written_samples
+                    src.setpos(start)
+                    remaining = end - start
+                    while remaining > 0:
+                        take = min(remaining, 32768)
+                        data = src.readframes(take)
+                        if not data:
+                            break
+                        frames = len(data) // (src.getsampwidth() * src.getnchannels())
+                        dst.writeframes(data)
+                        written_samples += frames
+                        remaining -= frames
+
+                copy_range(play_start, loop_end)
+                while written_samples < requested_samples:
+                    copy_range(loop_start, loop_end)
+
+    print(json.dumps(
+        {
+            "source": str(source),
+            "output": str(target),
+            "play_start": args.play_start,
+            "loop_start": args.loop_start,
+            "loop_end": args.loop_end,
+            "sample_rate": args.sample_rate,
+            "sample_count": written_samples,
+            "ffmpeg": {"path": ffmpeg_path, "source": ffmpeg_source},
+        },
+        ensure_ascii=False,
+        indent=2,
+    ))
+
+
 def cmd_ensure_plugins(args: argparse.Namespace) -> None:
     checks: list[dict[str, Any]] = []
 
@@ -2083,6 +2166,16 @@ def build_parser() -> argparse.ArgumentParser:
     clip_audio_parser.add_argument("--end-sample", type=int, required=True)
     clip_audio_parser.add_argument("--sample-rate", type=int, required=True)
     clip_audio_parser.set_defaults(func=cmd_clip_audio)
+
+    loop_audio_parser = subparsers.add_parser("loop-audio", help="Write a seamless loop preview WAV.")
+    loop_audio_parser.add_argument("source")
+    loop_audio_parser.add_argument("--output", required=True)
+    loop_audio_parser.add_argument("--play-start", type=int, required=True)
+    loop_audio_parser.add_argument("--loop-start", type=int, required=True)
+    loop_audio_parser.add_argument("--loop-end", type=int, required=True)
+    loop_audio_parser.add_argument("--sample-rate", type=int, required=True)
+    loop_audio_parser.add_argument("--duration-seconds", type=float, default=300.0)
+    loop_audio_parser.set_defaults(func=cmd_loop_audio)
 
     plugins_parser = subparsers.add_parser("ensure-plugins", help="Verify and integrate preview/transcode helper tools.")
     plugins_parser.add_argument("--vgmstream", help="Path to vgmstream-cli.")

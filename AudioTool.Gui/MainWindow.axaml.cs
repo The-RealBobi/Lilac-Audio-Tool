@@ -42,8 +42,8 @@ public sealed partial class MainWindow : Window
     private DateTime _playbackStartedAt;
     private int _playbackBaseSample;
     private int _playbackEndSample;
+    private int _playbackDurationSamples;
     private bool _playbackLoops;
-    private bool _restartingLoop;
     private TimelineDragMode _timelineDragMode = TimelineDragMode.None;
 
     public MainWindow()
@@ -328,7 +328,7 @@ public sealed partial class MainWindow : Window
             AppendLog(UiText.Current.PreviewReady(decoder, preview.Wav));
             if (autoPlay)
             {
-                StartPlayback();
+                await StartPlaybackAsync();
             }
         });
     }
@@ -388,7 +388,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        StartPlayback();
+        await StartPlaybackAsync();
     }
 
     private async void OnExecuteClick(object? sender, RoutedEventArgs e)
@@ -1272,19 +1272,26 @@ public sealed partial class MainWindow : Window
         _playerSourcePath = path;
         _playbackBaseSample = 0;
         _playbackEndSample = _wavSamples;
+        _playbackDurationSamples = _wavSamples;
         _playbackOffset = TimeSpan.Zero;
         UpdatePlaybackVisuals();
         PlaybackButton.Content = "▶";
     }
 
-    private void StartPlayback()
+    private async Task StartPlaybackAsync()
     {
         if (string.IsNullOrWhiteSpace(_playerSourcePath) || !File.Exists(_playerSourcePath))
         {
             return;
         }
 
-        StartPlayback(_playerSourcePath, 0, _wavSamples, HasActiveLoop());
+        if (HasActiveLoop())
+        {
+            await PlaySampleRangeAsync(0, CurrentLoopEnd(), loops: true);
+            return;
+        }
+
+        StartPlayback(_playerSourcePath, 0, _wavSamples, loops: false);
     }
 
     private async Task PlaySampleRangeAsync(int startSample, int endSample, bool loops)
@@ -1296,7 +1303,7 @@ public sealed partial class MainWindow : Window
 
         if (_wavSamples <= 0 || _wavSampleRate <= 0)
         {
-            StartPlayback();
+            await StartPlaybackAsync();
             return;
         }
 
@@ -1305,6 +1312,34 @@ public sealed partial class MainWindow : Window
         StopPlayback();
         var clipDirectory = Path.Combine(_dataRoot, "work", "playback");
         var clipPath = Path.Combine(clipDirectory, "preview_range.wav");
+        if (loops && HasActiveLoop())
+        {
+            clipPath = Path.Combine(clipDirectory, "preview_loop.wav");
+            var loopResult = await RunPythonAsync([
+                "loop-audio",
+                _playerSourcePath,
+                "--output",
+                clipPath,
+                "--play-start",
+                startSample.ToString(CultureInfo.InvariantCulture),
+                "--loop-start",
+                CurrentLoopStart().ToString(CultureInfo.InvariantCulture),
+                "--loop-end",
+                CurrentLoopEnd().ToString(CultureInfo.InvariantCulture),
+                "--sample-rate",
+                _wavSampleRate.ToString(CultureInfo.InvariantCulture)
+            ]);
+            if (loopResult.ExitCode != 0)
+            {
+                AppendLog(loopResult.CombinedOutput);
+                return;
+            }
+
+            var loopClip = JsonSerializer.Deserialize<PlaybackClipReport>(loopResult.Stdout, JsonOptions());
+            StartPlayback(clipPath, startSample, CurrentLoopEnd(), loops: true, durationSamples: loopClip?.SampleCount);
+            return;
+        }
+
         var result = await RunPythonAsync([
             "clip-audio",
             _playerSourcePath,
@@ -1326,7 +1361,7 @@ public sealed partial class MainWindow : Window
         StartPlayback(clipPath, startSample, endSample, loops);
     }
 
-    private void StartPlayback(string path, int baseSample, int endSample, bool loops)
+    private void StartPlayback(string path, int baseSample, int endSample, bool loops, int? durationSamples = null)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
@@ -1336,6 +1371,7 @@ public sealed partial class MainWindow : Window
         StopPlayback();
         _playbackBaseSample = Math.Clamp(baseSample, 0, Math.Max(0, _wavSamples));
         _playbackEndSample = Math.Clamp(endSample <= baseSample ? _wavSamples : endSample, _playbackBaseSample, Math.Max(_playbackBaseSample, _wavSamples));
+        _playbackDurationSamples = Math.Max(0, durationSamples ?? (_playbackEndSample - _playbackBaseSample));
         _playbackLoops = loops && HasActiveLoop();
         if (!TryStartControlledPlayback(path, out var error))
         {
@@ -1414,8 +1450,8 @@ public sealed partial class MainWindow : Window
         _playbackOffset = TimeSpan.Zero;
         _playbackBaseSample = 0;
         _playbackEndSample = _wavSamples;
+        _playbackDurationSamples = _wavSamples;
         _playbackLoops = false;
-        _restartingLoop = false;
         if (PlaybackButton is not null)
         {
             PlaybackButton.Content = "▶";
@@ -1423,25 +1459,11 @@ public sealed partial class MainWindow : Window
         UpdatePlaybackVisuals();
     }
 
-    private async void OnPlaybackTimerTick(object? sender, EventArgs e)
+    private void OnPlaybackTimerTick(object? sender, EventArgs e)
     {
         if (_playbackProcess is null || _playbackProcess.HasExited)
         {
             StopPlayback();
-            return;
-        }
-
-        if (_playbackLoops && !_restartingLoop && CurrentPlaybackSample() >= CurrentLoopEnd())
-        {
-            _restartingLoop = true;
-            try
-            {
-                await PlaySampleRangeAsync(CurrentLoopStart(), CurrentLoopEnd(), loops: true);
-            }
-            finally
-            {
-                _restartingLoop = false;
-            }
             return;
         }
 
@@ -1466,12 +1488,29 @@ public sealed partial class MainWindow : Window
             return _playbackBaseSample;
         }
 
-        return Math.Clamp(_playbackBaseSample + (int)Math.Round(CurrentPlaybackPosition().TotalSeconds * _wavSampleRate), 0, Math.Max(0, _wavSamples));
+        var elapsedSamples = Math.Max(0, (int)Math.Round(CurrentPlaybackPosition().TotalSeconds * _wavSampleRate));
+        if (_playbackLoops && HasActiveLoop())
+        {
+            var loopStart = CurrentLoopStart();
+            var loopEnd = CurrentLoopEnd();
+            var introSamples = Math.Max(0, loopEnd - _playbackBaseSample);
+            if (elapsedSamples < introSamples)
+            {
+                return Math.Clamp(_playbackBaseSample + elapsedSamples, 0, Math.Max(0, _wavSamples));
+            }
+
+            var loopLength = Math.Max(1, loopEnd - loopStart);
+            return loopStart + (elapsedSamples - introSamples) % loopLength;
+        }
+
+        return Math.Clamp(_playbackBaseSample + elapsedSamples, 0, Math.Max(0, _wavSamples));
     }
 
     private TimeSpan AudioDuration()
     {
-        var sampleCount = _playbackEndSample > _playbackBaseSample ? _playbackEndSample - _playbackBaseSample : _wavSamples;
+        var sampleCount = _playbackDurationSamples > 0
+            ? _playbackDurationSamples
+            : _playbackEndSample > _playbackBaseSample ? _playbackEndSample - _playbackBaseSample : _wavSamples;
         return _wavSampleRate <= 0 || sampleCount <= 0
             ? TimeSpan.Zero
             : TimeSpan.FromSeconds(sampleCount / (double)_wavSampleRate);
@@ -1484,11 +1523,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var duration = AudioDuration();
-        var progress = duration <= TimeSpan.Zero ? 0 : CurrentPlaybackPosition().TotalSeconds / duration.TotalSeconds;
-        progress = Math.Clamp(progress, 0, 1);
-        var span = _playbackEndSample > _playbackBaseSample ? _playbackEndSample - _playbackBaseSample : _wavSamples;
-        LoopTimeline.PlayheadSample = _wavSamples <= 0 ? 0 : Math.Clamp(_playbackBaseSample + (int)Math.Round(span * progress), 0, _wavSamples);
+        LoopTimeline.PlayheadSample = CurrentPlaybackSample();
     }
 
     private bool HasActiveLoop()
@@ -2346,6 +2381,12 @@ public sealed partial class MainWindow : Window
         public int Start { get; set; }
         [JsonPropertyName("end")]
         public int End { get; set; }
+    }
+
+    private sealed class PlaybackClipReport
+    {
+        [JsonPropertyName("sample_count")]
+        public int SampleCount { get; set; }
     }
 
     private sealed class ReplaceReport
