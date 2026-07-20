@@ -4,4 +4,5 @@
   </Folder>
   <Project Path="AudioTool.Core/AudioTool.Core.csproj" />
   <Project Path="AudioTool.Gui/AudioTool.Gui.csproj" />
+  <Project Path="AudioTool.Tests/AudioTool.Tests.csproj" />
 </Solution>

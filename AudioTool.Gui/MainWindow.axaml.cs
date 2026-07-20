@@ -10,6 +10,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using AudioTool.Core.Playback;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
@@ -33,10 +34,12 @@ public sealed partial class MainWindow : Window
     private bool _updatingLoopControls;
     private int _wavSamples;
     private int _wavSampleRate;
+    private int _wavChannels;
     private int? _wavLoopStart;
     private int? _wavLoopEnd;
     private string? _playerSourcePath;
     private Process? _playbackProcess;
+    private readonly SoundFlowPreviewPlayer _soundFlowPlayer = new();
     private readonly DispatcherTimer _playbackTimer;
     private TimeSpan _playbackOffset;
     private DateTime _playbackStartedAt;
@@ -181,6 +184,7 @@ public sealed partial class MainWindow : Window
     {
         SavePreferences();
         StopPlayback();
+        _soundFlowPlayer.Dispose();
         base.OnClosed(e);
     }
 
@@ -359,7 +363,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnPlaybackToggleClick(object? sender, RoutedEventArgs e)
     {
-        if (_playbackProcess is not null && !_playbackProcess.HasExited)
+        if (_soundFlowPlayer.IsActive || _playbackProcess is not null && !_playbackProcess.HasExited)
         {
             StopPlayback();
             return;
@@ -874,6 +878,7 @@ public sealed partial class MainWindow : Window
             StopPlayback();
             _wavSamples = 0;
             _wavSampleRate = 0;
+            _wavChannels = 0;
             _wavLoopStart = null;
             _wavLoopEnd = null;
             LoopTimeline.Peaks = [];
@@ -887,6 +892,7 @@ public sealed partial class MainWindow : Window
         var info = JsonSerializer.Deserialize<WavInfo>(result.Stdout, JsonOptions());
         _wavSamples = info?.SampleCount ?? 0;
         _wavSampleRate = info?.SampleRate ?? 0;
+        _wavChannels = info?.Channels ?? 2;
         _wavLoopStart = info?.Loop?.Start;
         _wavLoopEnd = info?.Loop?.End;
         LoopTimeline.Peaks = info?.Peaks ?? [];
@@ -1287,6 +1293,20 @@ public sealed partial class MainWindow : Window
 
         if (HasActiveLoop())
         {
+            var plan = AudioPlaybackPlanner.Create(
+                _playerSourcePath,
+                _wavSamples,
+                _wavSampleRate,
+                0,
+                CurrentLoopStart(),
+                CurrentLoopEnd(),
+                loopEnabled: true);
+            if (TryStartSoundFlowPlayback(plan, out _))
+            {
+                BeginPlayback(plan.PlayStartSample, plan.LoopEndSample ?? _wavSamples, loops: true);
+                return;
+            }
+
             await PlaySampleRangeAsync(0, CurrentLoopEnd(), loops: true);
             return;
         }
@@ -1314,6 +1334,20 @@ public sealed partial class MainWindow : Window
         var clipPath = Path.Combine(clipDirectory, "preview_range.wav");
         if (loops && HasActiveLoop())
         {
+            var plan = AudioPlaybackPlanner.Create(
+                _playerSourcePath,
+                _wavSamples,
+                _wavSampleRate,
+                startSample,
+                CurrentLoopStart(),
+                CurrentLoopEnd(),
+                loopEnabled: true);
+            if (TryStartSoundFlowPlayback(plan, out _))
+            {
+                BeginPlayback(plan.PlayStartSample, plan.LoopEndSample ?? _wavSamples, loops: true);
+                return;
+            }
+
             clipPath = Path.Combine(clipDirectory, "preview_loop.wav");
             var loopResult = await RunPythonAsync([
                 "loop-audio",
@@ -1336,7 +1370,7 @@ public sealed partial class MainWindow : Window
             }
 
             var loopClip = JsonSerializer.Deserialize<PlaybackClipReport>(loopResult.Stdout, JsonOptions());
-            StartPlayback(clipPath, startSample, CurrentLoopEnd(), loops: true, durationSamples: loopClip?.SampleCount);
+            StartPlayback(clipPath, startSample, CurrentLoopEnd(), loops: true, durationSamples: loopClip?.SampleCount, useSoundFlowLoop: false);
             return;
         }
 
@@ -1361,7 +1395,7 @@ public sealed partial class MainWindow : Window
         StartPlayback(clipPath, startSample, endSample, loops);
     }
 
-    private void StartPlayback(string path, int baseSample, int endSample, bool loops, int? durationSamples = null)
+    private void StartPlayback(string path, int baseSample, int endSample, bool loops, int? durationSamples = null, bool useSoundFlowLoop = true)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
@@ -1373,7 +1407,21 @@ public sealed partial class MainWindow : Window
         _playbackEndSample = Math.Clamp(endSample <= baseSample ? _wavSamples : endSample, _playbackBaseSample, Math.Max(_playbackBaseSample, _wavSamples));
         _playbackDurationSamples = Math.Max(0, durationSamples ?? (_playbackEndSample - _playbackBaseSample));
         _playbackLoops = loops && HasActiveLoop();
-        if (!TryStartControlledPlayback(path, out var error))
+        var plan = AudioPlaybackPlanner.Create(
+            path,
+            _wavSamples,
+            _wavSampleRate,
+            _playbackBaseSample,
+            CurrentLoopStart(),
+            CurrentLoopEnd(),
+            loopEnabled: _playbackLoops && useSoundFlowLoop);
+        if (TryStartSoundFlowPlayback(plan, out _))
+        {
+            BeginPlayback(_playbackBaseSample, _playbackEndSample, _playbackLoops);
+            return;
+        }
+
+        if (!TryStartProcessPlayback(path, out var error))
         {
             if (!string.IsNullOrWhiteSpace(error))
             {
@@ -1383,13 +1431,33 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        BeginPlayback(_playbackBaseSample, _playbackEndSample, _playbackLoops);
+    }
+
+    private void BeginPlayback(int baseSample, int endSample, bool loops)
+    {
+        _playbackBaseSample = baseSample;
+        _playbackEndSample = endSample;
+        _playbackLoops = loops;
         _playbackOffset = TimeSpan.Zero;
         _playbackStartedAt = DateTime.UtcNow;
         PlaybackButton.Content = "⏸";
         _playbackTimer.Start();
     }
 
-    private bool TryStartControlledPlayback(string path, out string? error)
+    private bool TryStartSoundFlowPlayback(AudioPlaybackPlan plan, out string? error)
+    {
+        return _soundFlowPlayer.TryPlay(
+            plan.SourcePath,
+            plan.SampleRate,
+            _wavChannels,
+            plan.PlayStartSample,
+            plan.Kind == PlaybackPlanKind.LoopPreview ? plan.LoopStartSample : null,
+            plan.Kind == PlaybackPlanKind.LoopPreview ? plan.LoopEndSample : null,
+            out error);
+    }
+
+    private bool TryStartProcessPlayback(string path, out string? error)
     {
         error = null;
         if (!OperatingSystem.IsMacOS())
@@ -1427,6 +1495,7 @@ public sealed partial class MainWindow : Window
     private void StopPlayback()
     {
         _playbackTimer.Stop();
+        _soundFlowPlayer.Stop();
         if (_playbackProcess is not null)
         {
             try
@@ -1461,13 +1530,21 @@ public sealed partial class MainWindow : Window
 
     private void OnPlaybackTimerTick(object? sender, EventArgs e)
     {
-        if (_playbackProcess is null || _playbackProcess.HasExited)
+        if (_soundFlowPlayer.IsActive)
+        {
+            if (!_soundFlowPlayer.IsPlaying)
+            {
+                StopPlayback();
+                return;
+            }
+        }
+        else if (_playbackProcess is null || _playbackProcess.HasExited)
         {
             StopPlayback();
             return;
         }
 
-        if (CurrentPlaybackPosition().TotalSeconds >= AudioDuration().TotalSeconds)
+        if (!_playbackLoops && CurrentPlaybackPosition().TotalSeconds >= AudioDuration().TotalSeconds)
         {
             StopPlayback();
             return;
@@ -2369,6 +2446,8 @@ public sealed partial class MainWindow : Window
         public int SampleCount { get; set; }
         [JsonPropertyName("sample_rate")]
         public int SampleRate { get; set; }
+        [JsonPropertyName("channels")]
+        public int Channels { get; set; }
         [JsonPropertyName("loop")]
         public WavLoop? Loop { get; set; }
         [JsonPropertyName("peaks")]
