@@ -185,7 +185,24 @@ public sealed partial class MainWindow : Window
         SavePreferences();
         StopPlayback();
         _soundFlowPlayer.Dispose();
+        ClearPreviewCache();
         base.OnClosed(e);
+    }
+
+    private void ClearPreviewCache()
+    {
+        var previewCache = Path.Combine(_dataRoot, ".cache", "previews");
+        try
+        {
+            if (Directory.Exists(previewCache))
+            {
+                Directory.Delete(previewCache, recursive: true);
+            }
+        }
+        catch
+        {
+            // Cache cleanup should never prevent the app from closing.
+        }
     }
 
     private async void OnBrowseAwbClick(object? sender, RoutedEventArgs e)
