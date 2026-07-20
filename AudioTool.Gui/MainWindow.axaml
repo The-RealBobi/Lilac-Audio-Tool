@@ -2,44 +2,71 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Level5.AudioTool.Gui"
         x:Class="Level5.AudioTool.Gui.MainWindow"
-        Width="1180"
+        Width="1280"
         Height="820"
-        MinWidth="980"
-        MinHeight="700"
+        MinWidth="1100"
+        MinHeight="720"
         Title="L5 Audio Tool"
         Icon="/Assets/icon.ico"
         DragDrop.AllowDrop="True">
-  <Grid Margin="20" RowDefinitions="Auto,*">
-    <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,18">
-      <StackPanel Orientation="Horizontal" Spacing="10">
-        <TextBlock Text="L5 Audio Tool" FontSize="30" FontWeight="Bold" />
-        <TextBlock x:Name="VersionTextBlock" VerticalAlignment="Center" Opacity="0.68" />
+  <Grid Margin="18" RowDefinitions="Auto,*" RowSpacing="14">
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="16">
+      <StackPanel Spacing="4">
+        <StackPanel Orientation="Horizontal" Spacing="10">
+          <TextBlock Text="L5 Audio Tool" FontSize="28" FontWeight="Bold" />
+          <TextBlock x:Name="VersionTextBlock" VerticalAlignment="Center" Opacity="0.68" />
+        </StackPanel>
+        <TextBlock x:Name="SubtitleTextBlock"
+                   Text="Reemplazo de audio ACB/AWB mediante backend Python"
+                   Opacity="0.72" />
       </StackPanel>
-      <TextBlock x:Name="SubtitleTextBlock" Text="Reemplazo de audio ACB/AWB mediante backend Python" Opacity="0.72" />
-    </StackPanel>
 
-    <Grid Grid.Row="1" ColumnDefinitions="420,12,*">
+      <Button x:Name="ExecuteButton"
+              Grid.Column="1"
+              Content="4. Exportar ACB/AWB"
+              Padding="22,10"
+              MinWidth="190"
+              VerticalAlignment="Center"
+              HorizontalContentAlignment="Center"
+              Click="OnExecuteClick" />
+    </Grid>
+
+    <Grid Grid.Row="1" ColumnDefinitions="300,12,*,12,360">
       <Border Grid.Column="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="12">
-          <TextBlock x:Name="FilesHeaderTextBlock" Text="1. Banco" FontWeight="SemiBold" />
-
-          <StackPanel Grid.Row="1" Spacing="8">
-            <TextBlock x:Name="BankLabelTextBlock" Text="ACB/AWB" Opacity="0.8" />
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-              <TextBox x:Name="AcbPathTextBox" Watermark="Banco .acb" IsReadOnly="True" />
-              <Button x:Name="BrowseBankButton" Grid.Column="1" Content="Examinar" Click="OnBrowseBankClick" />
+          <StackPanel Spacing="16">
+            <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
+              <TextBlock x:Name="FilesHeaderTextBlock" Text="1. Banco" FontWeight="SemiBold" />
+              <TextBlock Grid.Row="1"
+                         x:Name="BankLabelTextBlock"
+                         Text="ACB/AWB"
+                         Opacity="0.78" />
+              <Button Grid.Row="2"
+                      x:Name="BrowseBankButton"
+                      Content="Examinar"
+                      HorizontalAlignment="Stretch"
+                      HorizontalContentAlignment="Center"
+                      Click="OnBrowseBankClick" />
             </Grid>
-            <TextBox x:Name="AwbPathTextBox" Watermark="Banco .awb" IsReadOnly="True" />
-            <TextBox x:Name="WavPathTextBox" IsVisible="False" IsReadOnly="True" />
-            <TextBox x:Name="OutputDirectoryTextBox" IsVisible="False" IsReadOnly="True" />
-          </StackPanel>
 
-          <StackPanel Grid.Row="2" Spacing="12">
+            <Grid RowDefinitions="Auto,Auto" RowSpacing="8">
+              <TextBox x:Name="AcbPathTextBox"
+                       Watermark="Banco .acb"
+                       IsReadOnly="True"
+                       TextWrapping="NoWrap" />
+              <TextBox Grid.Row="1"
+                       x:Name="AwbPathTextBox"
+                       Watermark="Banco .awb"
+                       IsReadOnly="True"
+                       TextWrapping="NoWrap" />
+              <TextBox x:Name="WavPathTextBox" IsVisible="False" IsReadOnly="True" />
+              <TextBox x:Name="OutputDirectoryTextBox" IsVisible="False" IsReadOnly="True" />
+            </Grid>
+
             <Border Padding="12" CornerRadius="8" Background="#16232424">
-              <Grid RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="10">
+              <StackPanel Spacing="10">
                 <TextBlock x:Name="ChangesHeaderTextBlock" Text="2. Sustituciones" FontWeight="SemiBold" />
-                <Grid Grid.Row="1" ColumnDefinitions="120,*" ColumnSpacing="10">
+                <Grid ColumnDefinitions="118,*" ColumnSpacing="8">
                   <ComboBox x:Name="SelectorModeComboBox" SelectedIndex="0" SelectionChanged="OnSelectorChanged">
                     <ComboBoxItem Content="ID AWB" />
                     <ComboBoxItem Content="Índice" />
@@ -52,108 +79,29 @@
                                  Value="0"
                                  ValueChanged="OnSelectorNumberChanged" />
                 </Grid>
-                <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
-                  <Button x:Name="InspectAwbButton"
-                          Content="Leer entradas AWB"
-                          Click="OnInspectAwbClick" />
-                  <Button x:Name="PreviewEntryButton"
-                          Content="Reproducir entrada"
-                          Click="OnPreviewEntryClick" />
-                </StackPanel>
-                <StackPanel Grid.Row="3" Spacing="8">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button x:Name="SubstituteButton" Content="Sustituir" Click="OnSubstituteClick" />
-                    <Button x:Name="RemoveReplacementButton" Content="Quitar" Click="OnRemoveReplacementClick" />
-                    <Button x:Name="ClearReplacementsButton" Content="Limpiar" Click="OnClearReplacementsClick" />
-                  </StackPanel>
-                  <DataGrid x:Name="ReplacementQueueGrid"
-                            Height="132"
-                            RowHeight="32"
-                            AutoGenerateColumns="False"
-                            IsReadOnly="True"
-                            GridLinesVisibility="Horizontal"
-                            SelectionChanged="OnReplacementSelectionChanged">
-                    <DataGrid.Columns>
-                      <DataGridTextColumn Header="Modo" Binding="{Binding Mode}" Width="70" />
-                      <DataGridTextColumn Header="Entrada" Binding="{Binding Entry}" Width="80" />
-                      <DataGridTemplateColumn Header="Audio" Width="*">
-                        <DataGridTemplateColumn.CellTemplate>
-                          <DataTemplate>
-                            <Border ClipToBounds="True">
-                              <TextBlock Text="{Binding AudioName}"
-                                         TextTrimming="CharacterEllipsis"
-                                         TextWrapping="NoWrap"
-                                         VerticalAlignment="Center"
-                                         ToolTip.Tip="{Binding AudioPath}" />
-                            </Border>
-                          </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                      </DataGridTemplateColumn>
-                    </DataGrid.Columns>
-                  </DataGrid>
-                </StackPanel>
-              </Grid>
+                <Button x:Name="SubstituteButton"
+                        Content="Sustituir"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center"
+                        Click="OnSubstituteClick" />
+              </StackPanel>
             </Border>
 
-            <Border Grid.Row="3" Padding="12" CornerRadius="8" Background="#16232424">
-              <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="10">
-                <TextBlock x:Name="LoopHeaderTextBlock" Text="3. Loop" FontWeight="SemiBold" />
-                <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                  <ComboBox x:Name="LoopModeComboBox" SelectedIndex="0" SelectionChanged="OnLoopModeChanged">
-                    <ComboBoxItem Content="Auto WAV smpl" />
-                    <ComboBoxItem Content="Manual" />
-                    <ComboBoxItem Content="Sin loop" />
-                  </ComboBox>
-                  <Button x:Name="UseWavLoopButton" Grid.Column="1" Content="Usar smpl" Click="OnUseWavLoopClick" />
-                </Grid>
-
-                <Grid Grid.Row="2" RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
-                  <TextBlock x:Name="LoopSummaryTextBlock" Text="Carga un WAV para ver duración y loop." Opacity="0.75" TextWrapping="Wrap" />
-                  <Grid Grid.Row="1" ColumnDefinitions="44,*" ColumnSpacing="10">
-                    <Button x:Name="PlaybackButton"
-                            Width="40"
-                            Height="58"
-                            Content="▶"
-                            FontSize="16"
-                            Click="OnPlaybackToggleClick" />
-                    <local:PlaybackTimeline Grid.Column="1"
-                                            x:Name="LoopTimeline"
-                                            Height="58"
-                                            PointerPressed="OnLoopTimelinePointerPressed"
-                                            PointerMoved="OnLoopTimelinePointerMoved"
-                                            PointerReleased="OnLoopTimelinePointerReleased"
-                                            PointerCaptureLost="OnLoopTimelinePointerCaptureLost"
-                                            SizeChanged="OnLoopTimelineSizeChanged" />
-                  </Grid>
-                  <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="8">
-                    <NumericUpDown x:Name="LoopStartBox"
-                                   Minimum="0"
-                                   Maximum="0"
-                                   Increment="1"
-                                   ValueChanged="OnLoopNumberChanged" />
-                    <NumericUpDown Grid.Column="1"
-                                   x:Name="LoopEndBox"
-                                   Minimum="0"
-                                   Maximum="0"
-                                   Increment="1"
-                                   ValueChanged="OnLoopNumberChanged" />
-                  </Grid>
-                </Grid>
-
-                <CheckBox Grid.Row="3" x:Name="KeepHcaCheckBox" Content="Conservar HCA generado junto al AWB" IsChecked="True" />
-                <CheckBox Grid.Row="4" x:Name="KeepReportsCheckBox" Content="Conservar reports/logs de exportación" IsChecked="False" />
-                <CheckBox Grid.Row="5" x:Name="UseModSuffixCheckBox" Content="Añadir sufijo .mod" IsChecked="True" />
-              </Grid>
+            <Border Padding="12" CornerRadius="8" Background="#16232424">
+              <StackPanel Spacing="10">
+                <TextBlock x:Name="ExportOptionsHeaderTextBlock" Text="Opciones de exportación" FontWeight="SemiBold" />
+                <CheckBox x:Name="KeepHcaCheckBox"
+                          Content="Conservar HCA generado junto al AWB"
+                          IsChecked="True" />
+                <CheckBox x:Name="KeepReportsCheckBox"
+                          Content="Conservar reports/logs de exportación"
+                          IsChecked="False" />
+                <CheckBox x:Name="UseModSuffixCheckBox"
+                          Content="Añadir sufijo .mod"
+                          IsChecked="True" />
+              </StackPanel>
             </Border>
-
-            <Button x:Name="ExecuteButton"
-                    Content="4. Exportar ACB/AWB"
-                    Padding="18,9"
-                    HorizontalAlignment="Stretch"
-                    HorizontalContentAlignment="Center"
-                    Click="OnExecuteClick" />
           </StackPanel>
-        </Grid>
         </ScrollViewer>
       </Border>
 
@@ -166,44 +114,118 @@
                     ShowsPreview="True"
                     Cursor="SizeWestEast" />
 
-      <Grid Grid.Column="2" RowDefinitions="260,12,*">
-        <Border Grid.Row="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
-          <Grid RowDefinitions="Auto,Auto,*" RowSpacing="10">
-            <TextBlock x:Name="EntriesHeaderTextBlock" Text="Entradas AWB" FontWeight="SemiBold" />
-            <TextBlock Grid.Row="1"
-                       x:Name="SelectedEntryTextBlock"
-                       Text="Selecciona una entrada para ver sus cues asociados."
-                       Opacity="0.76"
-                       TextWrapping="Wrap" />
-            <DataGrid Grid.Row="2"
-                      x:Name="AwbEntriesGrid"
-                      RowHeight="32"
-                      AutoGenerateColumns="False"
-                      IsReadOnly="True"
-                      GridLinesVisibility="Horizontal"
-                      SelectionChanged="OnAwbEntrySelectionChanged">
-              <DataGrid.Columns>
-                <DataGridTextColumn Header="Index" Binding="{Binding Index}" Width="68" />
-                <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="68" />
-                <DataGridTextColumn Header="Tipo" Binding="{Binding Extension}" Width="72" />
-                <DataGridTextColumn Header="Tamaño" Binding="{Binding Size}" Width="96" />
-                <DataGridTemplateColumn Header="Cue principal" Width="2*">
-                  <DataGridTemplateColumn.CellTemplate>
-                    <DataTemplate>
-                      <Border ClipToBounds="True">
-                        <TextBlock Text="{Binding PrimaryCue}"
-                                   TextTrimming="CharacterEllipsis"
-                                   TextWrapping="NoWrap"
-                                   VerticalAlignment="Center"
-                                   ToolTip.Tip="{Binding CueTooltip}" />
-                      </Border>
-                    </DataTemplate>
-                  </DataGridTemplateColumn.CellTemplate>
-                </DataGridTemplateColumn>
-                <DataGridTextColumn Header="Refs." Binding="{Binding CueReferenceSummary}" Width="72" />
-              </DataGrid.Columns>
-            </DataGrid>
+      <Border Grid.Column="2" Padding="14" CornerRadius="10" Background="#101C1C1C">
+        <Grid RowDefinitions="Auto,Auto,*" RowSpacing="10">
+          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+            <TextBlock x:Name="EntriesHeaderTextBlock"
+                       Text="Entradas AWB"
+                       FontWeight="SemiBold"
+                       VerticalAlignment="Center" />
+            <Button x:Name="InspectAwbButton"
+                    Grid.Column="1"
+                    Content="Leer entradas AWB"
+                    Click="OnInspectAwbClick" />
+            <Button x:Name="PreviewEntryButton"
+                    Grid.Column="2"
+                    Content="Reproducir entrada"
+                    Click="OnPreviewEntryClick" />
           </Grid>
+
+          <Border Grid.Row="1" Padding="10" CornerRadius="6" Background="#14282929">
+            <TextBlock x:Name="SelectedEntryTextBlock"
+                       Text="Selecciona una entrada para ver sus cues asociados."
+                       TextWrapping="Wrap" />
+          </Border>
+
+          <DataGrid Grid.Row="2"
+                    x:Name="AwbEntriesGrid"
+                    RowHeight="34"
+                    AutoGenerateColumns="False"
+                    IsReadOnly="True"
+                    GridLinesVisibility="Horizontal"
+                    SelectionChanged="OnAwbEntrySelectionChanged">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Index" Binding="{Binding Index}" Width="64" />
+              <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="64" />
+              <DataGridTextColumn Header="Tipo" Binding="{Binding Extension}" Width="70" />
+              <DataGridTextColumn Header="Tamaño" Binding="{Binding Size}" Width="92" />
+              <DataGridTemplateColumn Header="Cue principal" Width="2*">
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate>
+                    <Border ClipToBounds="True">
+                      <TextBlock Text="{Binding PrimaryCue}"
+                                 TextTrimming="CharacterEllipsis"
+                                 TextWrapping="NoWrap"
+                                 VerticalAlignment="Center"
+                                 ToolTip.Tip="{Binding CueTooltip}" />
+                    </Border>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTextColumn Header="Refs." Binding="{Binding CueReferenceSummary}" Width="64" />
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </Border>
+
+      <GridSplitter Grid.Column="3"
+                    Width="8"
+                    Margin="1,0"
+                    Background="#304F807D"
+                    ResizeDirection="Columns"
+                    ResizeBehavior="PreviousAndNext"
+                    ShowsPreview="True"
+                    Cursor="SizeWestEast" />
+
+      <Grid Grid.Column="4" RowDefinitions="Auto,12,190,12,*">
+        <Border Grid.Row="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
+          <StackPanel Spacing="10">
+            <TextBlock x:Name="LoopHeaderTextBlock" Text="3. Loop" FontWeight="SemiBold" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <ComboBox x:Name="LoopModeComboBox" SelectedIndex="0" SelectionChanged="OnLoopModeChanged">
+                <ComboBoxItem Content="Auto WAV smpl" />
+                <ComboBoxItem Content="Manual" />
+                <ComboBoxItem Content="Sin loop" />
+              </ComboBox>
+              <Button x:Name="UseWavLoopButton"
+                      Grid.Column="1"
+                      Content="Usar smpl"
+                      Click="OnUseWavLoopClick" />
+            </Grid>
+            <TextBlock x:Name="LoopSummaryTextBlock"
+                       Text="Carga un WAV para ver duración y loop."
+                       Opacity="0.75"
+                       TextWrapping="Wrap" />
+            <Grid ColumnDefinitions="44,*" ColumnSpacing="10">
+              <Button x:Name="PlaybackButton"
+                      Width="40"
+                      Height="58"
+                      Content="▶"
+                      FontSize="16"
+                      Click="OnPlaybackToggleClick" />
+              <local:PlaybackTimeline Grid.Column="1"
+                                      x:Name="LoopTimeline"
+                                      Height="58"
+                                      PointerPressed="OnLoopTimelinePointerPressed"
+                                      PointerMoved="OnLoopTimelinePointerMoved"
+                                      PointerReleased="OnLoopTimelinePointerReleased"
+                                      PointerCaptureLost="OnLoopTimelinePointerCaptureLost"
+                                      SizeChanged="OnLoopTimelineSizeChanged" />
+            </Grid>
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+              <NumericUpDown x:Name="LoopStartBox"
+                             Minimum="0"
+                             Maximum="0"
+                             Increment="1"
+                             ValueChanged="OnLoopNumberChanged" />
+              <NumericUpDown Grid.Column="1"
+                             x:Name="LoopEndBox"
+                             Minimum="0"
+                             Maximum="0"
+                             Increment="1"
+                             ValueChanged="OnLoopNumberChanged" />
+            </Grid>
+          </StackPanel>
         </Border>
 
         <GridSplitter Grid.Row="1"
@@ -216,10 +238,64 @@
                       Cursor="SizeNorthSouth" />
 
         <Border Grid.Row="2" Padding="14" CornerRadius="10" Background="#101C1C1C">
-          <Grid RowDefinitions="Auto,Auto,*" RowSpacing="10">
-            <TextBlock x:Name="OperationHeaderTextBlock" Text="Operación" FontWeight="SemiBold" />
-            <TextBlock Grid.Row="1" x:Name="CommandPreviewTextBlock" Text="Sin comando preparado." Opacity="0.75" TextWrapping="Wrap" />
-            <TextBox Grid.Row="2"
+          <Grid RowDefinitions="Auto,Auto,*" RowSpacing="8">
+            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+              <TextBlock x:Name="QueueHeaderTextBlock" Text="Cola" FontWeight="SemiBold" VerticalAlignment="Center" />
+              <Button x:Name="RemoveReplacementButton"
+                      Grid.Column="1"
+                      Content="Quitar"
+                      Click="OnRemoveReplacementClick" />
+              <Button x:Name="ClearReplacementsButton"
+                      Grid.Column="2"
+                      Content="Limpiar"
+                      Click="OnClearReplacementsClick" />
+            </Grid>
+            <TextBlock Grid.Row="1"
+                       x:Name="CommandPreviewTextBlock"
+                       Text="Sin comando preparado."
+                       Opacity="0.75"
+                       TextWrapping="Wrap" />
+            <DataGrid Grid.Row="2"
+                      x:Name="ReplacementQueueGrid"
+                      RowHeight="32"
+                      AutoGenerateColumns="False"
+                      IsReadOnly="True"
+                      GridLinesVisibility="Horizontal"
+                      SelectionChanged="OnReplacementSelectionChanged">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="Modo" Binding="{Binding Mode}" Width="62" />
+                <DataGridTextColumn Header="Entrada" Binding="{Binding Entry}" Width="76" />
+                <DataGridTemplateColumn Header="Audio" Width="*">
+                  <DataGridTemplateColumn.CellTemplate>
+                    <DataTemplate>
+                      <Border ClipToBounds="True">
+                        <TextBlock Text="{Binding AudioName}"
+                                   TextTrimming="CharacterEllipsis"
+                                   TextWrapping="NoWrap"
+                                   VerticalAlignment="Center"
+                                   ToolTip.Tip="{Binding AudioPath}" />
+                      </Border>
+                    </DataTemplate>
+                  </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+              </DataGrid.Columns>
+            </DataGrid>
+          </Grid>
+        </Border>
+
+        <GridSplitter Grid.Row="3"
+                      Height="8"
+                      Margin="0,1"
+                      Background="#304F807D"
+                      ResizeDirection="Rows"
+                      ResizeBehavior="PreviousAndNext"
+                      ShowsPreview="True"
+                      Cursor="SizeNorthSouth" />
+
+        <Border Grid.Row="4" Padding="14" CornerRadius="10" Background="#101C1C1C">
+          <Grid RowDefinitions="Auto,*" RowSpacing="10">
+            <TextBlock x:Name="OperationHeaderTextBlock" Text="Registro" FontWeight="SemiBold" />
+            <TextBox Grid.Row="1"
                      x:Name="LogTextBox"
                      IsReadOnly="True"
                      AcceptsReturn="True"

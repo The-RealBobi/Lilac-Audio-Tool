@@ -406,6 +406,9 @@ def acb_awb_clip_name_lists(acb_data: bytes) -> dict[int, list[str]]:
 
     sequence_table = nested.get("SequenceTable")
     synth_table = nested.get("SynthTable")
+    track_table = nested.get("TrackTable")
+    track_event_table = nested.get("TrackEventTable")
+    sequence_command_table = nested.get("SeqCommandTable")
     cue_name_table = nested.get("CueNameTable")
     cue_names_by_index: dict[int, str] = {}
     if cue_name_table is not None:
@@ -418,7 +421,7 @@ def acb_awb_clip_name_lists(acb_data: bytes) -> dict[int, list[str]]:
     names_by_awb_id: dict[int, list[str]] = {}
     for cue_index, cue_row in enumerate(cue_table.rows):
         cue_name = cue_names_by_index.get(cue_index) or cue_display_name(cue_row, cue_index)
-        for waveform_index in resolve_cue_waveforms(cue_row, waveform_table, sequence_table, synth_table):
+        for waveform_index in resolve_cue_waveforms(cue_row, waveform_table, sequence_table, synth_table, track_table, track_event_table, sequence_command_table):
             if waveform_index < 0 or waveform_index >= len(waveform_table.rows):
                 continue
 
@@ -1150,6 +1153,24 @@ def read_be_u16_items(data: bytes, count: int) -> list[int]:
     ]
 
 
+def command_synth_indices(data: bytes) -> list[int]:
+    indices: list[int] = []
+    patterns = (b"\x07\xd0\x04\x00\x02\x00", b"\x00\x4f\x05\x00\x01\x00")
+    for pattern in patterns:
+        start = 0
+        while True:
+            offset = data.find(pattern, start)
+            if offset < 0:
+                break
+            value_offset = offset + len(pattern)
+            if value_offset + 2 <= len(data):
+                value = struct.unpack_from("<H", data, value_offset)[0]
+                if value not in indices:
+                    indices.append(value)
+            start = offset + 1
+    return indices
+
+
 def resolve_synth_waveforms(synth_table: UtfTable | None, synth_index: int, seen: set[int] | None = None) -> list[int]:
     if synth_table is None or synth_index < 0 or synth_index >= len(synth_table.rows):
         return []
@@ -1177,6 +1198,9 @@ def resolve_cue_waveforms(
     waveform_table: UtfTable,
     sequence_table: UtfTable | None,
     synth_table: UtfTable | None,
+    track_table: UtfTable | None = None,
+    track_event_table: UtfTable | None = None,
+    sequence_command_table: UtfTable | None = None,
 ) -> list[int]:
     reference_type = int_value(cue_row, "ReferenceType")
     reference_index = int_value(cue_row, "ReferenceIndex")
@@ -1194,8 +1218,25 @@ def resolve_cue_waveforms(
     track_field = field_by_name(sequence_row, "TrackIndex")
     track_data = track_field.value if track_field is not None and isinstance(track_field.value, bytes) else b""
     waveforms: list[int] = []
-    for synth_index in read_be_u16_items(track_data, track_count):
-        waveforms.extend(resolve_synth_waveforms(synth_table, synth_index))
+    for track_index in read_be_u16_items(track_data, track_count):
+        if track_table is not None and track_event_table is not None and 0 <= track_index < len(track_table.rows):
+            event_index = int_value(track_table.rows[track_index], "EventIndex")
+            if event_index is not None and 0 <= event_index < len(track_event_table.rows):
+                command = field_by_name(track_event_table.rows[event_index], "Command")
+                command_data = command.value if command is not None and isinstance(command.value, bytes) else b""
+                for synth_index in command_synth_indices(command_data):
+                    waveforms.extend(resolve_synth_waveforms(synth_table, synth_index))
+                continue
+
+        waveforms.extend(resolve_synth_waveforms(synth_table, track_index))
+
+    if track_count == 0 and sequence_command_table is not None:
+        command_index = int_value(sequence_row, "CommandIndex")
+        if command_index is not None and 0 <= command_index < len(sequence_command_table.rows):
+            command = field_by_name(sequence_command_table.rows[command_index], "Command")
+            command_data = command.value if command is not None and isinstance(command.value, bytes) else b""
+            for synth_index in command_synth_indices(command_data):
+                waveforms.extend(resolve_synth_waveforms(synth_table, synth_index))
     return sorted({index for index in waveforms if 0 <= index < len(waveform_table.rows)})
 
 
@@ -1718,6 +1759,9 @@ def cmd_patch_acb_waveform(args: argparse.Namespace) -> None:
     cue_table = nested.get("CueTable")
     sequence_table = nested.get("SequenceTable")
     synth_table = nested.get("SynthTable")
+    track_table = nested.get("TrackTable")
+    track_event_table = nested.get("TrackEventTable")
+    sequence_command_table = nested.get("SeqCommandTable")
     extension_table = nested.get("WaveformExtensionDataTable")
     changed_waveforms = []
     old_durations_ms: dict[int, int] = {}
@@ -1779,7 +1823,7 @@ def cmd_patch_acb_waveform(args: argparse.Namespace) -> None:
     if args.patch_cue_lengths and cue_table is not None:
         changed_set = set(changed_waveforms)
         for cue_index, row in enumerate(cue_table.rows):
-            waveform_indices = resolve_cue_waveforms(row, waveform_table, sequence_table, synth_table)
+            waveform_indices = resolve_cue_waveforms(row, waveform_table, sequence_table, synth_table, track_table, track_event_table, sequence_command_table)
             if not changed_set.intersection(waveform_indices):
                 continue
 
