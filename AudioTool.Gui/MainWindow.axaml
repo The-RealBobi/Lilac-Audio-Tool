@@ -176,20 +176,26 @@
         <Border Grid.Row="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
           <StackPanel Spacing="10">
             <TextBlock x:Name="LoopHeaderTextBlock" Text="3. Loop" FontWeight="SemiBold" />
-            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
-              <ComboBox x:Name="LoopModeComboBox" SelectedIndex="0" SelectionChanged="OnLoopModeChanged">
+            <Grid RowDefinitions="Auto,Auto" RowSpacing="8">
+              <ComboBox x:Name="LoopModeComboBox"
+                        HorizontalAlignment="Stretch"
+                        SelectedIndex="0"
+                        SelectionChanged="OnLoopModeChanged">
                 <ComboBoxItem Content="Loop del archivo" />
                 <ComboBoxItem Content="Manual" />
                 <ComboBoxItem Content="Sin loop" />
               </ComboBox>
-              <Button x:Name="UseWavLoopButton"
-                      Grid.Column="1"
-                      Content="Usar loop detectado"
-                      Click="OnUseWavLoopClick" />
-              <Button x:Name="PreviewLoopButton"
-                      Grid.Column="2"
-                      Content="Reproducir loop"
-                      Click="OnPreviewLoopClick" />
+              <Grid Grid.Row="1" ColumnDefinitions="*,*" ColumnSpacing="8">
+                <Button x:Name="UseWavLoopButton"
+                        Content="Usar loop original"
+                        HorizontalContentAlignment="Center"
+                        Click="OnUseWavLoopClick" />
+                <Button x:Name="PreviewLoopButton"
+                        Grid.Column="1"
+                        Content="Reproducir loop"
+                        HorizontalContentAlignment="Center"
+                        Click="OnPreviewLoopClick" />
+              </Grid>
             </Grid>
             <TextBlock x:Name="LoopSummaryTextBlock"
                        Text="Carga un WAV para ver duración y loop."
