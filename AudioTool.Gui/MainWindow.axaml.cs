@@ -325,7 +325,15 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            await LoadWavInfoAsync(preview.Wav);
+            if (preview.WavInfo is not null)
+            {
+                ApplyWavInfo(preview.WavInfo);
+                AppendLog(UiText.Current.AudioInfo(_wavSamples, _wavSampleRate, DescribeLoop()));
+            }
+            else
+            {
+                await LoadWavInfoAsync(preview.Wav);
+            }
             ApplyPreviewLoop(preview);
             SetPlayerSource(preview.Wav);
             var decoder = string.IsNullOrWhiteSpace(preview.Decoder) ? UiText.Current.Unknown : preview.Decoder;
@@ -890,6 +898,12 @@ public sealed partial class MainWindow : Window
         }
 
         var info = JsonSerializer.Deserialize<WavInfo>(result.Stdout, JsonOptions());
+        ApplyWavInfo(info);
+        AppendLog(UiText.Current.AudioInfo(_wavSamples, _wavSampleRate, DescribeLoop()));
+    }
+
+    private void ApplyWavInfo(WavInfo? info)
+    {
         _wavSamples = info?.SampleCount ?? 0;
         _wavSampleRate = info?.SampleRate ?? 0;
         _wavChannels = info?.Channels ?? 2;
@@ -907,7 +921,6 @@ public sealed partial class MainWindow : Window
         LoopModeComboBox.SelectedIndex = _wavLoopStart is null ? 2 : 0;
         SetLoopEnabled(_wavLoopStart is not null);
         UpdateLoopVisuals();
-        AppendLog(UiText.Current.AudioInfo(_wavSamples, _wavSampleRate, DescribeLoop()));
     }
 
     private static ReplaceReport LoadReplaceReport(string targetAwb)
@@ -2488,6 +2501,10 @@ public sealed partial class MainWindow : Window
         public string? Wav { get; set; }
         [JsonPropertyName("decoder")]
         public string? Decoder { get; set; }
+        [JsonPropertyName("cached")]
+        public bool Cached { get; set; }
+        [JsonPropertyName("wav_info")]
+        public WavInfo? WavInfo { get; set; }
         [JsonPropertyName("loop")]
         public WavLoop? Loop { get; set; }
         [JsonPropertyName("sample_count")]

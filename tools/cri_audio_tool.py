@@ -1638,12 +1638,16 @@ def cmd_preview_awb_entry(args: argparse.Namespace) -> None:
     archive = parse_awb(read_cri(source))
     entry = select_awb_entry(archive, args.id, args.index)
     acb_entry = acb_awb_entry_info(read_cri(Path(args.acb)), entry.id) if args.acb else None
+    entry_sha1 = hashlib.sha1(entry.data).hexdigest()
     output.mkdir(parents=True, exist_ok=True)
 
-    entry_path = output / f"{source.stem}_{entry.index:04d}_{entry.id:05d}{entry.extension}"
-    entry_path.write_bytes(entry.data)
-    wav_path = output / f"{source.stem}_{entry.index:04d}_{entry.id:05d}.wav"
+    cache_dir = data_root() / ".cache" / "previews" / entry_sha1
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    entry_path = cache_dir / f"entry{entry.extension}"
+    wav_path = cache_dir / "preview.wav"
+    info_path = cache_dir / "preview.info.json"
     decoder = "copy"
+    cached = wav_path.exists() and wav_path.stat().st_size > 0
 
     def decode_with_vgmstream() -> bool:
         nonlocal decoder
@@ -1661,36 +1665,44 @@ def cmd_preview_awb_entry(args: argparse.Namespace) -> None:
             return True
         return False
 
-    if entry.extension == ".wav":
-        shutil.copy2(entry_path, wav_path)
-    elif entry.extension == ".hca":
-        if not decode_with_vgmstream():
-            subprocess.run(
-                helper_command(args, [
-                    "decode",
-                    str(entry_path),
-                    str(wav_path),
-                ]),
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            decoder = "cri-hca-tool"
-    elif entry.extension == ".adx":
-        if not decode_with_vgmstream():
-            subprocess.run(
-                helper_command(args, [
-                    "decode-adx",
-                    str(entry_path),
-                    str(wav_path),
-                ]),
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            decoder = "cri-hca-tool-adx"
+    if cached:
+        decoder = "cache"
     else:
-        raise ValueError(f"Preview is not supported for AWB entry type {entry.extension}")
+        entry_path.write_bytes(entry.data)
+        if entry.extension == ".wav":
+            shutil.copy2(entry_path, wav_path)
+        elif entry.extension == ".hca":
+            if not decode_with_vgmstream():
+                subprocess.run(
+                    helper_command(args, [
+                        "decode",
+                        str(entry_path),
+                        str(wav_path),
+                    ]),
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                decoder = "cri-hca-tool"
+        elif entry.extension == ".adx":
+            if not decode_with_vgmstream():
+                subprocess.run(
+                    helper_command(args, [
+                        "decode-adx",
+                        str(entry_path),
+                        str(wav_path),
+                    ]),
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                decoder = "cri-hca-tool-adx"
+        else:
+            raise ValueError(f"Preview is not supported for AWB entry type {entry.extension}")
+
+    wav_metadata = json.loads(info_path.read_text(encoding="utf-8")) if cached and info_path.exists() else wav_info(wav_path)
+    if not info_path.exists():
+        write_json(info_path, wav_metadata)
 
     print(json.dumps(
         {
@@ -1700,12 +1712,14 @@ def cmd_preview_awb_entry(args: argparse.Namespace) -> None:
                 "id": entry.id,
                 "extension": entry.extension,
                 "size": entry.size,
-                "sha1": hashlib.sha1(entry.data).hexdigest(),
+                "sha1": entry_sha1,
             },
             "extracted": str(entry_path),
             "wav": str(wav_path),
             "decoder": decoder,
             "acb_entry": acb_entry,
+            "cached": cached,
+            "wav_info": wav_metadata,
             "loop": acb_entry.get("loop") if acb_entry else None,
             "sample_count": acb_entry.get("sample_count") if acb_entry else None,
             "sample_rate": acb_entry.get("sample_rate") if acb_entry else None,
