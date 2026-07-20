@@ -40,4 +40,11 @@ public sealed class PlaybackPlanTests
         Assert.Null(plan.LoopStartSample);
         Assert.Null(plan.LoopEndSample);
     }
+
+    [Fact]
+    public void ConvertsFrameSamplesToInterleavedSamples()
+    {
+        Assert.Equal(96_000, AudioSampleUnits.ToInterleavedSampleOffset(48_000, 2));
+        Assert.Equal(48_000, AudioSampleUnits.ToInterleavedSampleOffset(48_000, 1));
+    }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using AudioTool.Core.Playback;
 using SoundFlow.Abstracts.Devices;
 using SoundFlow.Backends.MiniAudio;
 using SoundFlow.Backends.MiniAudio.Devices;
@@ -46,16 +47,19 @@ internal sealed class SoundFlowPreviewPlayer : IDisposable
             _provider = new StreamDataProvider(_engine, _stream, null!);
             _player = new SoundPlayer(_engine, _format, _provider);
             _device.MasterMixer.AddComponent(_player);
+            var channelCount = Math.Max(1, _format.Channels);
 
             if (loopStartSample is not null && loopEndSample is not null && loopEndSample > loopStartSample)
             {
-                _player.SetLoopPoints(loopStartSample.Value, loopEndSample.Value);
+                _player.SetLoopPoints(
+                    AudioSampleUnits.ToInterleavedSampleOffset(loopStartSample.Value, channelCount),
+                    AudioSampleUnits.ToInterleavedSampleOffset(loopEndSample.Value, channelCount));
                 _player.IsLooping = true;
             }
 
             if (startSample > 0)
             {
-                _player.Seek(startSample);
+                _player.Seek(AudioSampleUnits.ToInterleavedSampleOffset(startSample, channelCount));
             }
 
             _player.Play();
