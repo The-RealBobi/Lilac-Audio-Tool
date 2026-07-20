@@ -42,6 +42,8 @@ public sealed partial class MainWindow : Window
     private DateTime _playbackStartedAt;
     private int _playbackBaseSample;
     private int _playbackEndSample;
+    private bool _playbackLoops;
+    private bool _restartingLoop;
     private TimelineDragMode _timelineDragMode = TimelineDragMode.None;
 
     public MainWindow()
@@ -726,7 +728,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        await PlaySampleRangeAsync(start, end);
+        await PlaySampleRangeAsync(start, end, loops: true);
     }
 
     private void OnLoopNumberChanged(object? sender, NumericUpDownValueChangedEventArgs e)
@@ -765,7 +767,7 @@ public sealed partial class MainWindow : Window
         if (position.Y > PlaybackTimeline.RulerHeight)
         {
             _timelineDragMode = TimelineDragMode.None;
-            await PlaySampleRangeAsync(sample, _wavSamples);
+            await PlaySampleRangeAsync(sample, _wavSamples, loops: ShouldLoopPlaybackFrom(sample));
             return;
         }
 
@@ -1249,10 +1251,10 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        StartPlayback(_playerSourcePath, 0, _wavSamples);
+        StartPlayback(_playerSourcePath, 0, _wavSamples, HasActiveLoop());
     }
 
-    private async Task PlaySampleRangeAsync(int startSample, int endSample)
+    private async Task PlaySampleRangeAsync(int startSample, int endSample, bool loops)
     {
         if (string.IsNullOrWhiteSpace(_playerSourcePath) || !File.Exists(_playerSourcePath))
         {
@@ -1288,10 +1290,10 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        StartPlayback(clipPath, startSample, endSample);
+        StartPlayback(clipPath, startSample, endSample, loops);
     }
 
-    private void StartPlayback(string path, int baseSample, int endSample)
+    private void StartPlayback(string path, int baseSample, int endSample, bool loops)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
@@ -1301,6 +1303,7 @@ public sealed partial class MainWindow : Window
         StopPlayback();
         _playbackBaseSample = Math.Clamp(baseSample, 0, Math.Max(0, _wavSamples));
         _playbackEndSample = Math.Clamp(endSample <= baseSample ? _wavSamples : endSample, _playbackBaseSample, Math.Max(_playbackBaseSample, _wavSamples));
+        _playbackLoops = loops && HasActiveLoop();
         if (!TryStartControlledPlayback(path, out var error))
         {
             if (!string.IsNullOrWhiteSpace(error))
@@ -1378,6 +1381,8 @@ public sealed partial class MainWindow : Window
         _playbackOffset = TimeSpan.Zero;
         _playbackBaseSample = 0;
         _playbackEndSample = _wavSamples;
+        _playbackLoops = false;
+        _restartingLoop = false;
         if (PlaybackButton is not null)
         {
             PlaybackButton.Content = "▶";
@@ -1385,11 +1390,25 @@ public sealed partial class MainWindow : Window
         UpdatePlaybackVisuals();
     }
 
-    private void OnPlaybackTimerTick(object? sender, EventArgs e)
+    private async void OnPlaybackTimerTick(object? sender, EventArgs e)
     {
         if (_playbackProcess is null || _playbackProcess.HasExited)
         {
             StopPlayback();
+            return;
+        }
+
+        if (_playbackLoops && !_restartingLoop && CurrentPlaybackSample() >= CurrentLoopEnd())
+        {
+            _restartingLoop = true;
+            try
+            {
+                await PlaySampleRangeAsync(CurrentLoopStart(), CurrentLoopEnd(), loops: true);
+            }
+            finally
+            {
+                _restartingLoop = false;
+            }
             return;
         }
 
@@ -1405,6 +1424,16 @@ public sealed partial class MainWindow : Window
     private TimeSpan CurrentPlaybackPosition()
     {
         return _playbackOffset + (DateTime.UtcNow - _playbackStartedAt);
+    }
+
+    private int CurrentPlaybackSample()
+    {
+        if (_wavSampleRate <= 0)
+        {
+            return _playbackBaseSample;
+        }
+
+        return Math.Clamp(_playbackBaseSample + (int)Math.Round(CurrentPlaybackPosition().TotalSeconds * _wavSampleRate), 0, Math.Max(0, _wavSamples));
     }
 
     private TimeSpan AudioDuration()
@@ -1427,6 +1456,26 @@ public sealed partial class MainWindow : Window
         progress = Math.Clamp(progress, 0, 1);
         var span = _playbackEndSample > _playbackBaseSample ? _playbackEndSample - _playbackBaseSample : _wavSamples;
         LoopTimeline.PlayheadSample = _wavSamples <= 0 ? 0 : Math.Clamp(_playbackBaseSample + (int)Math.Round(span * progress), 0, _wavSamples);
+    }
+
+    private bool HasActiveLoop()
+    {
+        return LoopModeComboBox.SelectedIndex != 2 && _wavSamples > 0 && CurrentLoopEnd() > CurrentLoopStart();
+    }
+
+    private bool ShouldLoopPlaybackFrom(int sample)
+    {
+        return HasActiveLoop() && sample < CurrentLoopEnd();
+    }
+
+    private int CurrentLoopStart()
+    {
+        return Math.Clamp((int)(LoopStartBox.Value ?? 0), 0, Math.Max(0, _wavSamples - 1));
+    }
+
+    private int CurrentLoopEnd()
+    {
+        return Math.Clamp((int)(LoopEndBox.Value ?? _wavSamples), CurrentLoopStart() + 1, Math.Max(CurrentLoopStart() + 1, _wavSamples));
     }
 
     private string DescribeLoop()
