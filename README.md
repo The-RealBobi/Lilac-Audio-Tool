@@ -51,3 +51,7 @@ Runtime notes:
 - Set `L5_AUDIO_PYTHON` if Python is installed in a non-standard location.
 - Set `L5_AUDIO_DATA_ROOT` to force a portable data folder next to the app or inside a modding toolkit.
 - Set `L5_AUDIO_ROOT` only when running from an unusual folder layout.
+
+## Special thanks
+
+- **DaRk_Proaso** for testing, bug reporting, and UI and UX improvement suggestions.
