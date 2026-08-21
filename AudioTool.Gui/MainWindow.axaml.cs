@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -32,6 +34,7 @@ public sealed partial class MainWindow : Window
     private bool _uiReady;
     private bool _loadingPreferences;
     private bool _updatingLoopControls;
+    private int? _editingReplacementEntry;
     private int _wavSamples;
     private int _wavSampleRate;
     private int _wavChannels;
@@ -676,6 +679,34 @@ public sealed partial class MainWindow : Window
         AddReplacementToQueue(audioPath, (int)(EntryNumberBox.Value ?? 0));
     }
 
+    private void OnReplacementBeginningEdit(object? sender, DataGridBeginningEditEventArgs e)
+    {
+        _editingReplacementEntry = e.Row.DataContext is ReplacementQueueItem item ? item.Entry : null;
+    }
+
+    private void OnReplacementCellEditEnded(object? sender, DataGridCellEditEndedEventArgs e)
+    {
+        if (e.Row.DataContext is not ReplacementQueueItem item)
+        {
+            return;
+        }
+
+        if (IsReplacementEntryAvailable(item.SelectorMode, item.Entry, item))
+        {
+            _editingReplacementEntry = null;
+            UpdateCommandPreview();
+            return;
+        }
+
+        var fallback = _editingReplacementEntry is int previous && IsReplacementEntryAvailable(item.SelectorMode, previous, item)
+            ? previous
+            : TryGetFirstAvailableReplacementEntry(item.SelectorMode, out var next) ? next : item.Entry;
+        item.Entry = fallback;
+        _editingReplacementEntry = null;
+        AppendLog(UiText.Current.InvalidReplacementTarget(item.Mode, item.Entry));
+        UpdateCommandPreview();
+    }
+
     private void OnRemoveReplacementClick(object? sender, RoutedEventArgs e)
     {
         if (ReplacementQueueGrid.SelectedItem is ReplacementQueueItem item)
@@ -728,7 +759,6 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var audioOffset = 0;
         foreach (var path in files)
         {
             var extension = Path.GetExtension(path).ToLowerInvariant();
@@ -750,8 +780,14 @@ public sealed partial class MainWindow : Window
             }
 
             WavPathTextBox.Text = path;
-            AddReplacementToQueue(path, GuessEntryFromFileName(path) ?? (int)(EntryNumberBox.Value ?? 0) + audioOffset);
-            audioOffset++;
+            var selectorMode = SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index";
+            if (!TryGetFirstAvailableReplacementEntry(selectorMode, out var entry))
+            {
+                AppendLog(UiText.Current.NoAvailableReplacementEntry);
+                continue;
+            }
+
+            AddReplacementToQueue(path, entry);
         }
 
         var selectedAudio = WavPathTextBox.Text?.Trim();
@@ -1042,17 +1078,62 @@ public sealed partial class MainWindow : Window
     private void AddReplacementToQueue(string audioPath, int entry)
     {
         var selectorMode = SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index";
+        entry = Math.Max(0, entry);
+        if (!IsReplacementEntryAvailable(selectorMode, entry))
+        {
+            AppendLog(UiText.Current.InvalidReplacementTarget(selectorMode == "--id" ? "ID" : UiText.Current.Index, entry));
+            return;
+        }
+
         var loop = CurrentLoopSnapshot();
-        _replacementQueue.Add(new ReplacementQueueItem(selectorMode, Math.Max(0, entry), audioPath, loop.Mode, loop.Start, loop.End));
-        AppendLog(UiText.Current.Queued(Path.GetFileName(audioPath), selectorMode == "--id" ? "ID" : UiText.Current.Index, Math.Max(0, entry)));
+        _replacementQueue.Add(new ReplacementQueueItem(selectorMode, entry, audioPath, loop.Mode, loop.Start, loop.End));
+        AppendLog(UiText.Current.Queued(Path.GetFileName(audioPath), selectorMode == "--id" ? "ID" : UiText.Current.Index, entry));
         UpdateCommandPreview();
     }
 
-    private static int? GuessEntryFromFileName(string path)
+    private bool TryGetFirstAvailableReplacementEntry(string selectorMode, out int entry)
     {
-        var fileName = Path.GetFileNameWithoutExtension(path);
-        var digits = new string(fileName.TakeWhile(char.IsDigit).ToArray());
-        return int.TryParse(digits, out var value) ? value : null;
+        entry = 0;
+        if (_awbEntries.Count == 0)
+        {
+            return false;
+        }
+
+        var candidates = selectorMode == "--id"
+            ? _awbEntries.Select(item => item.Id)
+            : _awbEntries.Select(item => item.Index);
+        foreach (var value in candidates.Where(value => IsReplacementEntryAvailable(selectorMode, value)))
+        {
+            entry = value;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool IsReplacementEntryAvailable(string selectorMode, int entry, ReplacementQueueItem? except = null)
+    {
+        if (!IsReplacementEntryValid(selectorMode, entry))
+        {
+            return false;
+        }
+
+        return !_replacementQueue.Any(item =>
+            !ReferenceEquals(item, except) &&
+            string.Equals(item.SelectorMode, selectorMode, StringComparison.Ordinal) &&
+            item.Entry == entry);
+    }
+
+    private bool IsReplacementEntryValid(string selectorMode, int entry)
+    {
+        if (_awbEntries.Count == 0)
+        {
+            return entry >= 0;
+        }
+
+        return selectorMode == "--id"
+            ? _awbEntries.Any(item => item.Id == entry)
+            : _awbEntries.Any(item => item.Index == entry);
     }
 
     private static bool IsSupportedAudio(string path)
@@ -2173,10 +2254,44 @@ public sealed partial class MainWindow : Window
         public string Label => $"{(SelectorMode == "--id" ? "ID" : UiText.Current.Index)} {Entry} <- {Path.GetFileName(AudioPath) ?? AudioPath}";
     }
 
-    private sealed record ReplacementQueueItem(string SelectorMode, int Entry, string AudioPath, int LoopMode, int LoopStart, int LoopEnd)
+    private sealed class ReplacementQueueItem(
+        string selectorMode,
+        int entry,
+        string audioPath,
+        int loopMode,
+        int loopStart,
+        int loopEnd) : INotifyPropertyChanged
     {
+        private int _entry = entry;
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        public string SelectorMode { get; } = selectorMode;
+        public int Entry
+        {
+            get => _entry;
+            set
+            {
+                if (_entry == value)
+                {
+                    return;
+                }
+
+                _entry = Math.Max(0, value);
+                OnPropertyChanged();
+            }
+        }
+        public string AudioPath { get; } = audioPath;
+        public int LoopMode { get; } = loopMode;
+        public int LoopStart { get; } = loopStart;
+        public int LoopEnd { get; } = loopEnd;
         public string Mode => SelectorMode == "--id" ? "ID" : UiText.Current.Index;
         public string AudioName => Path.GetFileName(AudioPath) ?? AudioPath;
+
+        private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
     }
 
     private sealed class UiText
@@ -2232,6 +2347,7 @@ public sealed partial class MainWindow : Window
             OverwriteCancelled = "Exportación cancelada: la salida ya existe.",
             BankListsClearedForBankChange = "Listas limpiadas al cambiar de banco ACB/AWB.",
             OutputMatchesSource = "La salida coincide con el banco original. Elige otra carpeta o activa el sufijo .mod para no sobrescribir la fuente.",
+            NoAvailableReplacementEntry = "No hay más entradas disponibles en la lista cargada.",
             Unknown = "desconocido",
             PluginCheckFailed = "No se pudieron comprobar las herramientas de audio.",
             SelectAwbBeforeInspect = "Selecciona un AWB antes de leer las entradas.",
@@ -2308,6 +2424,7 @@ public sealed partial class MainWindow : Window
             OverwriteCancelled = "Export cancelled: output already exists.",
             BankListsClearedForBankChange = "Lists cleared after changing the ACB/AWB bank.",
             OutputMatchesSource = "The output path matches the original bank. Choose another folder or keep the .mod suffix to avoid overwriting the source.",
+            NoAvailableReplacementEntry = "There are no more available entries in the loaded list.",
             Unknown = "unknown",
             PluginCheckFailed = "Audio tools could not be checked.",
             SelectAwbBeforeInspect = "Select an AWB before reading entries.",
@@ -2382,6 +2499,7 @@ public sealed partial class MainWindow : Window
         public string OverwriteCancelled { get; init; } = "";
         public string BankListsClearedForBankChange { get; init; } = "";
         public string OutputMatchesSource { get; init; } = "";
+        public string NoAvailableReplacementEntry { get; init; } = "";
         public string Unknown { get; init; } = "";
         public string PluginCheckFailed { get; init; } = "";
         public string SelectAwbBeforeInspect { get; init; } = "";
@@ -2426,6 +2544,7 @@ public sealed partial class MainWindow : Window
         public string FileMissing(string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"No existe el archivo: {path}" : $"File not found: {path}";
         public string QueuedFileMissing(string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"No existe el archivo en cola: {path}" : $"Queued file not found: {path}";
         public string InvalidLoopRangeForEntry(string mode, int entry) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"El rango de loop manual no es válido para {mode} {entry}." : $"The manual loop range is invalid for {mode} {entry}.";
+        public string InvalidReplacementTarget(string mode, int entry) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"No se añadió a la cola: {mode} {entry} no está disponible." : $"Not queued: {mode} {entry} is not available.";
         public string AudioSummary(int samples, string duration, string loop) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Audio: {samples} muestras ({duration}). Loop: {loop}." : $"Audio: {samples} samples ({duration}). Loop: {loop}.";
         public string PlayerCannotPlayWithError(string error) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"El reproductor integrado no pudo reproducir ese archivo: {error}" : $"The built-in player could not play that file: {error}";
         public string ReplaceReportReadFailed(string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"No se pudo leer el informe de reemplazo: {path}" : $"Replacement report could not be read: {path}";

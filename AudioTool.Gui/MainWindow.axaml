@@ -137,14 +137,15 @@
                     RowHeight="34"
                     AutoGenerateColumns="False"
                     IsReadOnly="True"
+                    CanUserResizeColumns="True"
                     GridLinesVisibility="Horizontal"
                     SelectionChanged="OnAwbEntrySelectionChanged">
             <DataGrid.Columns>
-              <DataGridTextColumn Header="Index" Binding="{Binding Index}" Width="64" />
-              <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="64" />
-              <DataGridTextColumn Header="Tipo" Binding="{Binding Extension}" Width="70" />
-              <DataGridTextColumn Header="Tamaño" Binding="{Binding Size}" Width="92" />
-              <DataGridTemplateColumn Header="Nombre" Width="2*">
+              <DataGridTextColumn Header="Index" Binding="{Binding Index}" Width="74" MinWidth="56" />
+              <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="74" MinWidth="56" />
+              <DataGridTextColumn Header="Tipo" Binding="{Binding Extension}" Width="78" MinWidth="62" />
+              <DataGridTextColumn Header="Tamaño" Binding="{Binding Size}" Width="102" MinWidth="78" />
+              <DataGridTemplateColumn Header="Nombre" Width="2*" MinWidth="180">
                 <DataGridTemplateColumn.CellTemplate>
                   <DataTemplate>
                     <Border ClipToBounds="True">
@@ -157,7 +158,7 @@
                   </DataTemplate>
                 </DataGridTemplateColumn.CellTemplate>
               </DataGridTemplateColumn>
-              <DataGridTextColumn Header="Usos" Binding="{Binding CueReferenceSummary}" Width="64" />
+              <DataGridTextColumn Header="Usos" Binding="{Binding CueReferenceSummary}" Width="72" MinWidth="54" />
             </DataGrid.Columns>
           </DataGrid>
         </Grid>
@@ -264,13 +265,16 @@
                       x:Name="ReplacementQueueGrid"
                       RowHeight="32"
                       AutoGenerateColumns="False"
-                      IsReadOnly="True"
+                      IsReadOnly="False"
+                      CanUserResizeColumns="True"
                       GridLinesVisibility="Horizontal"
+                      BeginningEdit="OnReplacementBeginningEdit"
+                      CellEditEnded="OnReplacementCellEditEnded"
                       SelectionChanged="OnReplacementSelectionChanged">
               <DataGrid.Columns>
-                <DataGridTextColumn Header="Modo" Binding="{Binding Mode}" Width="62" />
-                <DataGridTextColumn Header="Entrada" Binding="{Binding Entry}" Width="76" />
-                <DataGridTemplateColumn Header="Audio" Width="*">
+                <DataGridTextColumn Header="Modo" Binding="{Binding Mode}" Width="72" MinWidth="58" IsReadOnly="True" />
+                <DataGridTextColumn Header="Entrada" Binding="{Binding Entry, Mode=TwoWay}" Width="92" MinWidth="72" />
+                <DataGridTemplateColumn Header="Audio" Width="*" MinWidth="170" IsReadOnly="True">
                   <DataGridTemplateColumn.CellTemplate>
                     <DataTemplate>
                       <Border ClipToBounds="True">
