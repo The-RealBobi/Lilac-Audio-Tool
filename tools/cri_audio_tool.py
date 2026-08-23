@@ -564,6 +564,114 @@ class UtfTable:
         return payload
 
 
+def clone_utf_row(row: list[UtfField]) -> list[UtfField]:
+    return [UtfField(field.name, field.raw_type, bytes(field.value) if isinstance(field.value, bytes) else field.value, -1, 0) for field in row]
+
+
+def set_utf_value(row: list[UtfField], name: str, value: Any) -> None:
+    field = field_by_name(row, name)
+    if field is None:
+        raise ValueError(f"UTF row has no field '{name}'")
+    field.value = value
+
+
+def utf_scalar_size(type_id: int) -> int:
+    return {0x00: 1, 0x01: 1, 0x02: 2, 0x03: 2, 0x04: 4, 0x05: 4, 0x06: 8, 0x08: 4, 0x0A: 4, 0x0B: 8}.get(type_id, 0)
+
+
+def serialize_utf(table: UtfTable) -> bytes:
+    """Rebuild a CRI @UTF table with every column stored per row.
+
+    Constant columns are deliberately expanded into row storage. This keeps
+    the schema and values intact while making row append operations predictable.
+    """
+    if not table.rows:
+        raise ValueError(f"Cannot serialize empty UTF table '{table.name}'")
+
+    columns = table.rows[0]
+    normalized: list[tuple[str, int, list[Any]]] = []
+    for column_index, column in enumerate(columns):
+        raw_type = (column.raw_type & 0x0F) | 0x50
+        if utf_scalar_size(raw_type & 0x0F) == 0:
+            raise ValueError(f"Unsupported UTF column type 0x{raw_type & 0x0F:02x} in '{table.name}.{column.name}'")
+        values = [row[column_index].value for row in table.rows]
+        normalized.append((column.name, raw_type, values))
+
+    strings = bytearray()
+    string_offsets: dict[str, int] = {}
+
+    def string_offset(value: str) -> int:
+        if value not in string_offsets:
+            string_offsets[value] = len(strings)
+            strings.extend(value.encode("utf-8"))
+            strings.append(0)
+        return string_offsets[value]
+
+    table_name_offset = string_offset(table.name)
+    data_pool = bytearray()
+    row_bytes = bytearray()
+    for row_index in range(len(table.rows)):
+        for _, raw_type, values in normalized:
+            type_id = raw_type & 0x0F
+            value = values[row_index]
+            if type_id == 0x0A:
+                row_bytes.extend(struct.pack(">I", string_offset(value if isinstance(value, str) else "")))
+            elif type_id == 0x0B:
+                payload = bytes(value or b"")
+                row_bytes.extend(struct.pack(">II", len(data_pool), len(payload)))
+                data_pool.extend(payload)
+            elif type_id == 0x08:
+                row_bytes.extend(struct.pack(">f", float(value or 0)))
+            elif type_id == 0x06:
+                row_bytes.extend(struct.pack(">Q", int(value or 0)))
+            elif type_id == 0x05:
+                row_bytes.extend(struct.pack(">i", int(value or 0)))
+            elif type_id == 0x04:
+                row_bytes.extend(struct.pack(">I", int(value or 0)))
+            elif type_id == 0x03:
+                row_bytes.extend(struct.pack(">h", int(value or 0)))
+            elif type_id == 0x02:
+                row_bytes.extend(struct.pack(">H", int(value or 0)))
+            elif type_id == 0x01:
+                row_bytes.extend(struct.pack(">b", int(value or 0)))
+            else:
+                row_bytes.append(int(value or 0) & 0xFF)
+
+    schema = bytearray()
+    for name, raw_type, _ in normalized:
+        schema.append(raw_type)
+        schema.extend(struct.pack(">I", string_offset(name)))
+
+    row_offset = 0x20 + len(schema)
+    string_offset_absolute = row_offset + len(row_bytes)
+    data_offset_absolute = string_offset_absolute + len(strings)
+    header = bytearray(0x20)
+    header[0:4] = ACB_MAGIC
+    # @UTF stores the table size (excluding the eight-byte preamble) here.
+    # The reader does not need it, but CRI's runtime validates it.
+    struct.pack_into(">H", header, 0x06, 0)
+    struct.pack_into(">H", header, 0x0A, row_offset - 8)
+    struct.pack_into(">I", header, 0x0C, string_offset_absolute - 8)
+    struct.pack_into(">I", header, 0x10, data_offset_absolute - 8)
+    struct.pack_into(">I", header, 0x14, table_name_offset)
+    struct.pack_into(">H", header, 0x18, len(normalized))
+    struct.pack_into(">H", header, 0x1A, len(row_bytes) // len(table.rows))
+    struct.pack_into(">I", header, 0x1C, len(table.rows))
+    output = header + schema + row_bytes + strings + data_pool
+    if len(output) - 8 > 0xFFFF:
+        raise ValueError(f"UTF table '{table.name}' is too large for its size field")
+    struct.pack_into(">H", output, 0x06, len(output) - 8)
+    return bytes(output)
+
+
+def replace_nested_utf(table: UtfTable, replacements: dict[str, bytes]) -> bytes:
+    for row in table.rows:
+        for field in row:
+            if field.kind == "data" and field.name in replacements:
+                field.value = replacements[field.name]
+    return serialize_utf(table)
+
+
 def parse_utf(data: bytes) -> UtfTable:
     return parse_utf_at(data, 0)
 
@@ -2089,6 +2197,160 @@ def cmd_patch_acb_waveform(args: argparse.Namespace) -> None:
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
+def patch_be_u16_items(payload: bytes, mapping: dict[int, int]) -> bytes:
+    output = bytearray(payload)
+    for offset in range(0, len(output) - 1, 2):
+        value = struct.unpack_from(">H", output, offset)[0]
+        if value in mapping:
+            struct.pack_into(">H", output, offset, mapping[value])
+    return bytes(output)
+
+
+def patch_track_event_synth(payload: bytes, mapping: dict[int, int]) -> bytes:
+    output = bytearray(payload)
+    for pattern in (b"\x07\xd0\x04\x00\x02\x00", b"\x00\x4f\x05\x00\x01\x00"):
+        cursor = 0
+        while True:
+            offset = output.find(pattern, cursor)
+            if offset < 0:
+                break
+            value_offset = offset + len(pattern)
+            if value_offset + 2 <= len(output):
+                value = struct.unpack_from("<H", output, value_offset)[0]
+                if value in mapping:
+                    struct.pack_into("<H", output, value_offset, mapping[value])
+            cursor = offset + 1
+    return bytes(output)
+
+
+def cmd_add_acb_awb_hca(args: argparse.Namespace) -> None:
+    source_acb = Path(args.acb)
+    source_awb = Path(args.awb)
+    target_acb = Path(args.output_acb)
+    target_awb = Path(args.output_awb)
+    hca = Path(args.hca).read_bytes()
+    if not hca.startswith(HCA_MAGIC):
+        raise ValueError("The new entry must be a plain HCA file")
+
+    acb_data = read_cri(source_acb)
+    awb_data = read_cri(source_awb)
+    archive = parse_awb(awb_data)
+    if any(entry.id == args.awb_id for entry in archive.entries):
+        raise ValueError(f"AWB ID {args.awb_id} already exists")
+    if args.name in [field_by_name(row, "CueName").value for row in parse_utf(acb_data).nested_tables()["CueNameTable"].rows]:
+        raise ValueError(f"Cue name already exists: {args.name}")
+
+    root = parse_utf(acb_data)
+    nested = root.nested_tables()
+    required = ["CueNameTable", "CueTable", "WaveformTable", "SequenceTable", "SynthTable", "TrackTable", "TrackEventTable"]
+    missing = [name for name in required if name not in nested]
+    if missing:
+        raise ValueError(f"ACB is missing required tables: {', '.join(missing)}")
+
+    cue_name_table = nested["CueNameTable"]
+    cue_table = nested["CueTable"]
+    waveform_table = nested["WaveformTable"]
+    sequence_table = nested["SequenceTable"]
+    synth_table = nested["SynthTable"]
+    track_table = nested["TrackTable"]
+    track_event_table = nested["TrackEventTable"]
+    template_name_row = next((row for row in cue_name_table.rows if field_by_name(row, "CueName") and field_by_name(row, "CueName").value == args.template_name), None)
+    if template_name_row is None:
+        raise ValueError(f"Template cue not found: {args.template_name}")
+    template_cue_index = int_value(template_name_row, "CueIndex")
+    if template_cue_index is None or template_cue_index >= len(cue_table.rows):
+        raise ValueError("Template cue index is invalid")
+    template_cue = cue_table.rows[template_cue_index]
+    template_sequence_index = int_value(template_cue, "ReferenceIndex")
+    if int_value(template_cue, "ReferenceType") != 3 or template_sequence_index is None:
+        raise ValueError("Template cue is not a sequence cue")
+
+    sequence = clone_utf_row(sequence_table.rows[template_sequence_index])
+    old_track_field = field_by_name(sequence, "TrackIndex")
+    old_track_indices = read_be_u16_items(old_track_field.value, int_value(sequence, "NumTracks") or 0) if old_track_field else []
+    if len(old_track_indices) != 1:
+        raise ValueError("Only one-track template cues are supported")
+    old_track_index = old_track_indices[0]
+    old_track = clone_utf_row(track_table.rows[old_track_index])
+    old_event_index = int_value(old_track, "EventIndex")
+    if old_event_index is None:
+        raise ValueError("Template track has no event")
+    old_event = clone_utf_row(track_event_table.rows[old_event_index])
+    old_synth_indices = command_synth_indices(field_by_name(old_event, "Command").value)
+    if len(old_synth_indices) != 1:
+        raise ValueError("Only one-synth template cues are supported")
+    old_synth_index = old_synth_indices[0]
+    old_synth = clone_utf_row(synth_table.rows[old_synth_index])
+
+    new_waveform_index = len(waveform_table.rows)
+    new_synth_index = len(synth_table.rows)
+    new_event_index = len(track_event_table.rows)
+    new_track_index = len(track_table.rows)
+    new_sequence_index = len(sequence_table.rows)
+    new_cue_index = len(cue_table.rows)
+
+    waveform = clone_utf_row(waveform_table.rows[resolve_cue_waveforms(template_cue, waveform_table, sequence_table, synth_table, track_table, track_event_table, nested.get("SeqCommandTable"))[0]])
+    set_utf_value(waveform, "StreamAwbId", args.awb_id)
+    if field_by_name(waveform, "NumSamples") is not None and args.samples is not None:
+        set_utf_value(waveform, "NumSamples", args.samples)
+    if args.channels is not None:
+        set_utf_value(waveform, "NumChannels", args.channels)
+    if args.sample_rate is not None:
+        set_utf_value(waveform, "SamplingRate", args.sample_rate)
+    set_utf_value(waveform, "LoopFlag", 1)
+    set_utf_value(old_synth, "ReferenceItems", patch_be_u16_items(field_by_name(old_synth, "ReferenceItems").value, {resolve_cue_waveforms(template_cue, waveform_table, sequence_table, synth_table, track_table, track_event_table, nested.get("SeqCommandTable"))[0]: new_waveform_index}))
+    set_utf_value(old_synth, "ControlWorkArea1", new_synth_index)
+    set_utf_value(old_synth, "ControlWorkArea2", new_synth_index)
+    set_utf_value(old_event, "Command", patch_track_event_synth(field_by_name(old_event, "Command").value, {old_synth_index: new_synth_index}))
+    set_utf_value(old_track, "EventIndex", new_event_index)
+    set_utf_value(sequence, "TrackIndex", struct.pack(">H", new_track_index))
+    cue = clone_utf_row(template_cue)
+    set_utf_value(cue, "CueId", max((int_value(row, "CueId") or 0 for row in cue_table.rows), default=0) + 1)
+    set_utf_value(cue, "ReferenceIndex", new_sequence_index)
+    set_utf_value(cue, "Length", args.length_ms)
+    cue_name = clone_utf_row(template_name_row)
+    set_utf_value(cue_name, "CueName", args.name)
+    set_utf_value(cue_name, "CueIndex", new_cue_index)
+
+    waveform_table.rows.append(waveform)
+    synth_table.rows.append(old_synth)
+    track_event_table.rows.append(old_event)
+    track_table.rows.append(old_track)
+    sequence_table.rows.append(sequence)
+    cue_table.rows.append(cue)
+    cue_name_table.rows.append(cue_name)
+
+    output_awb_data = build_awb(archive, [*archive.entries, AwbEntry(len(archive.entries), args.awb_id, 0, hca)])
+    # StreamAwbAfs2Header stores the complete AFS2 header, not a fixed-size
+    # prefix. Adding an AWB entry can enlarge that header by ID/offset fields.
+    final_archive = parse_awb(output_awb_data)
+    awb_header_size = 0x10 + len(final_archive.entries) * final_archive.id_size + (len(final_archive.entries) + 1) * final_archive.offset_size
+    afs2_header_table = nested.get("StreamAwbAfs2Header")
+    if afs2_header_table is not None and afs2_header_table.rows:
+        header_field = field_by_name(afs2_header_table.rows[0], "Header")
+        if header_field is not None:
+            set_utf_value(afs2_header_table.rows[0], "Header", output_awb_data[:awb_header_size])
+    nested_bytes = {name: serialize_utf(table) for name, table in nested.items()}
+    output_acb_data = replace_nested_utf(root, nested_bytes)
+    target_awb.parent.mkdir(parents=True, exist_ok=True)
+    target_awb.write_bytes(output_awb_data)
+    output_acb_data = bytearray(output_acb_data)
+    awb_md5 = hashlib.md5(output_awb_data).digest()
+    result_root = parse_utf(bytes(output_acb_data))
+    result_nested = result_root.nested_tables()
+    for row in result_nested.get("StreamAwbHash", UtfTable("", [])).rows:
+        field = field_by_name(row, "Hash")
+        if field is not None and len(field.value) == len(awb_md5):
+            output_acb_data[field.offset:field.offset + len(awb_md5)] = awb_md5
+    for row in result_nested.get("StreamAwbAfs2Header", UtfTable("", [])).rows:
+        field = field_by_name(row, "Header")
+        if field is not None and isinstance(field.value, bytes) and len(output_awb_data) >= len(field.value):
+            output_acb_data[field.offset:field.offset + len(field.value)] = output_awb_data[:len(field.value)]
+    target_acb.parent.mkdir(parents=True, exist_ok=True)
+    target_acb.write_bytes(output_acb_data)
+    print(json.dumps({"acb": str(target_acb), "awb": str(target_awb), "name": args.name, "awb_id": args.awb_id, "new_cue_index": new_cue_index, "new_waveform_index": new_waveform_index}, ensure_ascii=False, indent=2))
+
+
 def cmd_patch_acb_stream_awb(args: argparse.Namespace) -> None:
     source = Path(args.source)
     target = Path(args.target)
@@ -2273,6 +2535,24 @@ def build_parser() -> argparse.ArgumentParser:
     patch_stream_awb_parser.add_argument("--awb", required=True)
     patch_stream_awb_parser.add_argument("--name", help="StreamAwbHash.Name to patch. Defaults to AWB stem.")
     patch_stream_awb_parser.set_defaults(func=cmd_patch_acb_stream_awb)
+
+    add_entry_parser = subparsers.add_parser(
+        "add-acb-awb-hca",
+        help="Append a real cue chain and HCA entry to an ACB/AWB pair.",
+    )
+    add_entry_parser.add_argument("--acb", required=True)
+    add_entry_parser.add_argument("--awb", required=True)
+    add_entry_parser.add_argument("--hca", required=True)
+    add_entry_parser.add_argument("--output-acb", required=True)
+    add_entry_parser.add_argument("--output-awb", required=True)
+    add_entry_parser.add_argument("--name", required=True, help="New cue name.")
+    add_entry_parser.add_argument("--template-name", required=True, help="Existing one-waveform cue used as the routing template.")
+    add_entry_parser.add_argument("--awb-id", required=True, type=lambda value: int(value, 0))
+    add_entry_parser.add_argument("--samples", type=int, required=True)
+    add_entry_parser.add_argument("--channels", type=int)
+    add_entry_parser.add_argument("--sample-rate", type=int)
+    add_entry_parser.add_argument("--length-ms", type=int, required=True)
+    add_entry_parser.set_defaults(func=cmd_add_acb_awb_hca)
 
     return parser
 

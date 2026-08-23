@@ -51,6 +51,7 @@ public sealed partial class MainWindow : Window
     private int _playbackDurationSamples;
     private bool _playbackLoops;
     private TimelineDragMode _timelineDragMode = TimelineDragMode.None;
+    private NewEntryRequest? _newEntryRequest;
 
     public MainWindow()
     {
@@ -70,6 +71,8 @@ public sealed partial class MainWindow : Window
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
         AddHandler(DragDrop.DropEvent, OnDrop);
         LoadPreferences();
+        RestoreColumnWidths();
+        AttachColumnPreferenceHandlers();
         SetLoopEnabled(false);
         _uiReady = true;
         UpdateCommandPreview();
@@ -92,6 +95,7 @@ public sealed partial class MainWindow : Window
         ChangesHeaderTextBlock.Text = strings.Changes;
         InspectAwbButton.Content = strings.ReadEntries;
         PreviewEntryButton.Content = strings.PlayEntry;
+        AddEntryButton.Content = strings.AddEntry;
         SubstituteButton.Content = strings.Replace;
         RemoveReplacementButton.Content = strings.Remove;
         ClearReplacementsButton.Content = strings.Clear;
@@ -302,6 +306,38 @@ public sealed partial class MainWindow : Window
         await PreviewSelectedAwbEntryAsync(autoPlay: true);
     }
 
+    private async void OnAddEntryClick(object? sender, RoutedEventArgs e)
+    {
+        if (_awbEntries.Count == 0 || string.IsNullOrWhiteSpace(AcbPathTextBox.Text) || string.IsNullOrWhiteSpace(AwbPathTextBox.Text))
+        {
+            AppendLog(UiText.Current.SelectBankBeforeNewEntry);
+            return;
+        }
+
+        var template = AwbEntriesGrid.SelectedItem as AwbEntryViewModel ?? _awbEntries[0];
+        var audioPath = await PickFileAsync(UiText.Current.PickNewEntryAudioTitle,
+            [new FilePickerFileType("Audio") { Patterns = ["*.wav", "*.flac", "*.ogg", "*.mp3", "*.m4a", "*.aac", "*.aiff", "*.aif"] }]);
+        if (string.IsNullOrWhiteSpace(audioPath))
+        {
+            return;
+        }
+
+        var cueName = await PromptForTextAsync(UiText.Current.NewEntryNameTitle, UiText.Current.NewEntryNamePrompt,
+            Path.GetFileNameWithoutExtension(audioPath));
+        if (string.IsNullOrWhiteSpace(cueName))
+        {
+            return;
+        }
+
+        _newEntryRequest = new NewEntryRequest(cueName.Trim(), template.Id, audioPath);
+        WavPathTextBox.Text = audioPath;
+        await LoadWavInfoAsync(audioPath);
+        SetPlayerSource(audioPath);
+        AppendLog(UiText.Current.NewEntryQueued(cueName.Trim(), template.Id));
+        SavePreferences();
+        UpdateCommandPreview();
+    }
+
     private async Task PreviewSelectedAwbEntryAsync(bool autoPlay)
     {
         if (string.IsNullOrWhiteSpace(AwbPathTextBox.Text) || !File.Exists(AwbPathTextBox.Text))
@@ -436,6 +472,18 @@ public sealed partial class MainWindow : Window
 
         if (!ValidateInputs(out var acbPath, out var awbPath, out var wavPath, out _))
         {
+            return;
+        }
+
+        if (_newEntryRequest is not null)
+        {
+            if (_replacementQueue.Count > 0)
+            {
+                AppendLog(UiText.Current.NewEntryCannotBatch);
+                return;
+            }
+
+            await ExportNewEntryAsync(acbPath, awbPath, outputDirectory, _newEntryRequest);
             return;
         }
 
@@ -595,6 +643,114 @@ public sealed partial class MainWindow : Window
                 AppendLog(UiText.Current.Done(targetAwb));
             }
         });
+    }
+
+    private async Task ExportNewEntryAsync(string acbPath, string awbPath, string outputDirectory, NewEntryRequest request)
+    {
+        var targetAwb = BuildExportPath(outputDirectory, awbPath, ".awb");
+        var targetAcb = BuildExportPath(outputDirectory, acbPath, ".acb");
+        if (IsSamePath(targetAcb, acbPath) || IsSamePath(targetAwb, awbPath))
+        {
+            AppendLog(UiText.Current.OutputMatchesSource);
+            return;
+        }
+
+        if (!await PrepareOverwriteAsync(targetAcb, targetAwb))
+        {
+            return;
+        }
+
+        await RunBusyAsync(async () =>
+        {
+            var stage = Path.Combine(_dataRoot, "work", $"new-entry-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(stage);
+            try
+            {
+                var encodedAwb = Path.Combine(stage, "encoded.awb");
+                var encodeResult = await RunPythonAsync([
+                    "replace-awb-wav", awbPath, encodedAwb, request.AudioPath,
+                    "--id", request.TemplateAwbId.ToString(), "--no-loop", "--keep-hca"]);
+                AppendLog(encodeResult.CombinedOutput);
+                if (encodeResult.ExitCode != 0)
+                {
+                    return;
+                }
+
+                var replacementHca = encodedAwb + ".replacement.hca";
+                var report = LoadReplaceReport(encodedAwb);
+                var addResult = await RunPythonAsync([
+                    "add-acb-awb-hca",
+                    "--acb", acbPath,
+                    "--awb", awbPath,
+                    "--hca", replacementHca,
+                    "--output-acb", targetAcb,
+                    "--output-awb", targetAwb,
+                    "--name", request.CueName,
+                    "--template-name", FindCueName(request.TemplateAwbId),
+                    "--awb-id", FindNextAwbId().ToString(),
+                    "--samples", report.EffectiveSampleCount.ToString(),
+                    "--channels", (report.PreparedWavInfo?.Channels ?? _wavChannels).ToString(),
+                    "--sample-rate", (report.PreparedWavInfo?.SampleRate ?? _wavSampleRate).ToString(),
+                    "--length-ms", Math.Max(1, (int)Math.Round(report.EffectiveSampleCount * 1000d / Math.Max(1, report.PreparedWavInfo?.SampleRate ?? _wavSampleRate))).ToString()
+                ]);
+                AppendLog(addResult.CombinedOutput);
+                if (addResult.ExitCode != 0)
+                {
+                    return;
+                }
+
+                var streamResult = await RunPythonAsync([
+                    "patch-acb-stream-awb", targetAcb, targetAcb, "--awb", targetAwb,
+                    "--name", Path.GetFileNameWithoutExtension(awbPath)]);
+                AppendLog(streamResult.CombinedOutput);
+                if (streamResult.ExitCode == 0)
+                {
+                    if (KeepReportsCheckBox.IsChecked != true)
+                    {
+                        DeleteExportReports(targetAcb, targetAwb);
+                    }
+                    AppendLog(UiText.Current.NewEntryExported(request.CueName));
+                    _newEntryRequest = null;
+                    AppendLog(UiText.Current.Done(targetAcb));
+                    AppendLog(UiText.Current.Done(targetAwb));
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(stage, true); } catch { }
+            }
+        });
+    }
+
+    private string FindCueName(int awbId)
+    {
+        return _awbEntries.FirstOrDefault(entry => entry.Id == awbId)?.CueNames.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name))
+            ?? _awbEntries.FirstOrDefault(entry => entry.Id == awbId)?.Name
+            ?? throw new InvalidDataException(UiText.Current.TemplateNameMissing);
+    }
+
+    private int FindNextAwbId() => _awbEntries.Count == 0 ? 0 : _awbEntries.Max(entry => entry.Id) + 1;
+
+    private async Task<string?> PromptForTextAsync(string title, string prompt, string initialValue)
+    {
+        var input = new TextBox { Text = initialValue, MinWidth = 420 };
+        var ok = new Button { Content = UiText.Current.Accept, MinWidth = 100 };
+        var cancel = new Button { Content = UiText.Current.Cancel, MinWidth = 100 };
+        var dialog = new Window
+        {
+            Title = title, Width = 520, SizeToContent = SizeToContent.Height, CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Avalonia.Thickness(18), Spacing = 14,
+                Children = { new TextBlock { Text = prompt, TextWrapping = Avalonia.Media.TextWrapping.Wrap }, input,
+                    new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { cancel, ok } } }
+            }
+        };
+        cancel.Click += (_, _) => dialog.Close(false);
+        ok.Click += (_, _) => dialog.Close(true);
+        var accepted = await dialog.ShowDialog<bool>(this);
+        return accepted ? input.Text?.Trim() : null;
     }
 
     private void OnLoopModeChanged(object? sender, SelectionChangedEventArgs e)
@@ -1984,6 +2140,8 @@ public sealed partial class MainWindow : Window
             KeepHcaCheckBox.IsChecked = preferences.KeepHca;
             KeepReportsCheckBox.IsChecked = preferences.KeepReports;
             UseModSuffixCheckBox.IsChecked = preferences.UseModSuffix;
+            _savedAwbColumnWidths = preferences.AwbColumnWidths ?? [];
+            _savedQueueColumnWidths = preferences.QueueColumnWidths ?? [];
         }
         catch (Exception ex)
         {
@@ -2018,6 +2176,8 @@ public sealed partial class MainWindow : Window
                 KeepHca = KeepHcaCheckBox.IsChecked == true,
                 KeepReports = KeepReportsCheckBox.IsChecked == true,
                 UseModSuffix = UseModSuffixCheckBox.IsChecked == true
+                ,AwbColumnWidths = ReadColumnWidths(AwbEntriesGrid)
+                ,QueueColumnWidths = ReadColumnWidths(ReplacementQueueGrid)
             };
 
             Directory.CreateDirectory(Path.GetDirectoryName(_preferencesPath)!);
@@ -2027,6 +2187,42 @@ public sealed partial class MainWindow : Window
         {
             AppendLog(UiText.Current.PreferencesSaveFailed(ex.Message));
         }
+    }
+
+    private List<double> _savedAwbColumnWidths = [];
+    private List<double> _savedQueueColumnWidths = [];
+
+    private void AttachColumnPreferenceHandlers()
+    {
+        foreach (var column in AwbEntriesGrid.Columns.Concat(ReplacementQueueGrid.Columns))
+        {
+            column.PropertyChanged += (_, _) =>
+            {
+                if (_uiReady) SavePreferences();
+            };
+        }
+    }
+
+    private void RestoreColumnWidths()
+    {
+        ApplyColumnWidths(AwbEntriesGrid.Columns, _savedAwbColumnWidths);
+        ApplyColumnWidths(ReplacementQueueGrid.Columns, _savedQueueColumnWidths);
+    }
+
+    private static void ApplyColumnWidths(IList<DataGridColumn> columns, IReadOnlyList<double> widths)
+    {
+        for (var i = 0; i < columns.Count && i < widths.Count; i++)
+        {
+            if (widths[i] > 0 && double.IsFinite(widths[i]))
+            {
+                columns[i].Width = new DataGridLength(widths[i], DataGridLengthUnitType.Pixel);
+            }
+        }
+    }
+
+    private static List<double> ReadColumnWidths(DataGrid grid)
+    {
+        return grid.Columns.Select(column => column.Width.IsAbsolute ? column.Width.Value : 0).ToList();
     }
 
     private void OnPreferenceChanged(object? sender, RoutedEventArgs e)
@@ -2254,6 +2450,8 @@ public sealed partial class MainWindow : Window
         public string Label => $"{(SelectorMode == "--id" ? "ID" : UiText.Current.Index)} {Entry} <- {Path.GetFileName(AudioPath) ?? AudioPath}";
     }
 
+    private sealed record NewEntryRequest(string CueName, int TemplateAwbId, string AudioPath);
+
     private sealed class ReplacementQueueItem(
         string selectorMode,
         int entry,
@@ -2310,6 +2508,7 @@ public sealed partial class MainWindow : Window
             ReadEntries = "Leer entradas AWB",
             PlayEntry = "Reproducir",
             Replace = "Sustituir",
+            AddEntry = "Nueva entrada",
             Remove = "Quitar",
             Clear = "Limpiar",
             Loop = "3. Reproductor y loop",
@@ -2357,6 +2556,14 @@ public sealed partial class MainWindow : Window
             AddReplacementRequired = "Añade al menos un reemplazo.",
             UpdatingBankInfo = "Actualizando datos del banco...",
             PickReplacementAudioTitle = "Seleccionar audio de reemplazo",
+            PickNewEntryAudioTitle = "Seleccionar audio para la nueva entrada",
+            NewEntryNameTitle = "Nombre de la nueva entrada",
+            NewEntryNamePrompt = "Escribe el nombre exacto del cue nuevo:",
+            SelectBankBeforeNewEntry = "Carga y lee un banco ACB/AWB antes de añadir una entrada nueva.",
+            NewEntryCannotBatch = "La nueva entrada se exporta por separado; limpia la cola de sustituciones antes de exportar.",
+            TemplateNameMissing = "La entrada elegida no tiene un nombre de cue utilizable.",
+            NewEntryExported = cue => $"Nueva entrada exportada: {cue}",
+            Accept = "Aceptar",
             SelectReplacementBeforeQueue = "Selecciona un audio de reemplazo antes de añadirlo a la cola.",
             AudioMetadataMissing = "No se pudo leer la duración directamente. Se normalizará al exportar.",
             SelectOutputFolder = "Selecciona una carpeta de salida.",
@@ -2387,6 +2594,7 @@ public sealed partial class MainWindow : Window
             ReadEntries = "Read AWB entries",
             PlayEntry = "Play",
             Replace = "Replace",
+            AddEntry = "New entry",
             Remove = "Remove",
             Clear = "Clear",
             Loop = "3. Player and loop",
@@ -2434,6 +2642,14 @@ public sealed partial class MainWindow : Window
             AddReplacementRequired = "Add at least one replacement.",
             UpdatingBankInfo = "Updating bank data...",
             PickReplacementAudioTitle = "Select replacement audio",
+            PickNewEntryAudioTitle = "Select audio for the new entry",
+            NewEntryNameTitle = "New entry name",
+            NewEntryNamePrompt = "Enter the exact name for the new cue:",
+            SelectBankBeforeNewEntry = "Load and read an ACB/AWB bank before adding a new entry.",
+            NewEntryCannotBatch = "The new entry is exported separately. Clear the replacement queue before exporting.",
+            TemplateNameMissing = "The selected entry has no usable cue name.",
+            NewEntryExported = cue => $"New entry exported: {cue}",
+            Accept = "Accept",
             SelectReplacementBeforeQueue = "Select replacement audio before adding it to the queue.",
             AudioMetadataMissing = "Duration could not be read directly. The file will be normalized on export.",
             SelectOutputFolder = "Select an output folder.",
@@ -2462,6 +2678,7 @@ public sealed partial class MainWindow : Window
         public string ReadEntries { get; init; } = "";
         public string PlayEntry { get; init; } = "";
         public string Replace { get; init; } = "";
+        public string AddEntry { get; init; } = "";
         public string Remove { get; init; } = "";
         public string Clear { get; init; } = "";
         public string Loop { get; init; } = "";
@@ -2509,6 +2726,14 @@ public sealed partial class MainWindow : Window
         public string AddReplacementRequired { get; init; } = "";
         public string UpdatingBankInfo { get; init; } = "";
         public string PickReplacementAudioTitle { get; init; } = "";
+        public string PickNewEntryAudioTitle { get; init; } = "";
+        public string NewEntryNameTitle { get; init; } = "";
+        public string NewEntryNamePrompt { get; init; } = "";
+        public string SelectBankBeforeNewEntry { get; init; } = "";
+        public string NewEntryCannotBatch { get; init; } = "";
+        public string TemplateNameMissing { get; init; } = "";
+        public Func<string, string> NewEntryExported { get; init; } = _ => "";
+        public string Accept { get; init; } = "";
         public string SelectReplacementBeforeQueue { get; init; } = "";
         public string AudioMetadataMissing { get; init; } = "";
         public string SelectOutputFolder { get; init; } = "";
@@ -2529,6 +2754,9 @@ public sealed partial class MainWindow : Window
         public string PickExportFolderTitle { get; init; } = "";
 
         public string AudioMissing(string path) => $"{AudioMissingPrefix}: {path}";
+        public string NewEntryQueued(string cue, int templateId) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase)
+            ? $"Nueva entrada en cola: {cue} (plantilla ID {templateId})"
+            : $"New entry queued: {cue} (template ID {templateId})";
         public string AudioRoot(string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Raíz: {path}" : $"Root: {path}";
         public string DataRoot(string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Datos: {path}" : $"Data: {path}";
         public string PreferencesPath(string path) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase) ? $"Preferencias: {path}" : $"Preferences: {path}";
@@ -2571,6 +2799,8 @@ public sealed partial class MainWindow : Window
         public bool KeepHca { get; set; } = true;
         public bool KeepReports { get; set; }
         public bool UseModSuffix { get; set; } = true;
+        public List<double> AwbColumnWidths { get; set; } = [];
+        public List<double> QueueColumnWidths { get; set; } = [];
     }
 
     private sealed class AwbMetadata

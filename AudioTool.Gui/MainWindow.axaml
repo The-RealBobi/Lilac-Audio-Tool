@@ -88,7 +88,7 @@
 
       <Border Grid.Column="2" Padding="14" CornerRadius="10" Background="#101C1C1C">
         <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="10">
-          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+          <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
             <TextBlock x:Name="EntriesHeaderTextBlock"
                        Text="Entradas AWB"
                        FontWeight="SemiBold"
@@ -101,6 +101,10 @@
                     Grid.Column="2"
                     Content="Reproducir"
                     Click="OnPreviewEntryClick" />
+            <Button x:Name="AddEntryButton"
+                    Grid.Column="3"
+                    Content="Nueva entrada"
+                    Click="OnAddEntryClick" />
           </Grid>
 
           <Border Grid.Row="1" Padding="10" CornerRadius="6" Background="#14282929">
