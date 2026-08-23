@@ -4,8 +4,6 @@ Desktop tool for replacing audio inside ACB/AWB banks.
 
 It lets you open a bank pair, preview entries, queue one or more replacements, adjust loops, and export a patched pair ready to package as a mod.
 
-Local dumps, generated banks, SDK files, caches, and research outputs are not part of the repository.
-
 ## Build
 
 ```bash
