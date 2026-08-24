@@ -113,7 +113,7 @@
                        TextWrapping="Wrap" />
           </Border>
 
-          <Grid Grid.Row="2" ColumnDefinitions="118,120,Auto,Auto" ColumnSpacing="8">
+          <Grid Grid.Row="2" ColumnDefinitions="118,120,Auto,Auto,Auto,Auto" ColumnSpacing="8">
             <TextBlock x:Name="ChangesHeaderTextBlock"
                        Text="2. Entrada"
                        VerticalAlignment="Center"
@@ -134,6 +134,14 @@
                     x:Name="SubstituteButton"
                     Content="Sustituir"
                     Click="OnSubstituteClick" />
+            <Button Grid.Column="4"
+                    x:Name="RenameEntryButton"
+                    Content="Renombrar"
+                    Click="OnRenameEntryClick" />
+            <Button Grid.Column="5"
+                    x:Name="DeleteEntryButton"
+                    Content="Eliminar"
+                    Click="OnDeleteEntryClick" />
           </Grid>
 
           <DataGrid Grid.Row="3"
@@ -144,6 +152,13 @@
                     CanUserResizeColumns="True"
                     GridLinesVisibility="Horizontal"
                     SelectionChanged="OnAwbEntrySelectionChanged">
+            <DataGrid.ContextMenu>
+              <ContextMenu>
+                <MenuItem x:Name="ContextSubstituteItem" Header="Sustituir" Click="OnSubstituteClick" />
+                <MenuItem x:Name="ContextRenameItem" Header="Renombrar" Click="OnRenameEntryClick" />
+                <MenuItem x:Name="ContextDeleteItem" Header="Eliminar" Click="OnDeleteEntryClick" />
+              </ContextMenu>
+            </DataGrid.ContextMenu>
             <DataGrid.Columns>
               <DataGridTextColumn Header="Index" Binding="{Binding Index}" Width="74" MinWidth="56" />
               <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="74" MinWidth="56" />

@@ -52,6 +52,7 @@ public sealed partial class MainWindow : Window
     private bool _playbackLoops;
     private TimelineDragMode _timelineDragMode = TimelineDragMode.None;
     private NewEntryRequest? _newEntryRequest;
+    private CueAction? _pendingCueAction;
 
     public MainWindow()
     {
@@ -97,6 +98,11 @@ public sealed partial class MainWindow : Window
         PreviewEntryButton.Content = strings.PlayEntry;
         AddEntryButton.Content = strings.AddEntry;
         SubstituteButton.Content = strings.Replace;
+        RenameEntryButton.Content = strings.Rename;
+        DeleteEntryButton.Content = strings.Delete;
+        ContextSubstituteItem.Header = strings.Replace;
+        ContextRenameItem.Header = strings.Rename;
+        ContextDeleteItem.Header = strings.Delete;
         RemoveReplacementButton.Content = strings.Remove;
         ClearReplacementsButton.Content = strings.Clear;
         LoopHeaderTextBlock.Text = strings.Loop;
@@ -487,6 +493,18 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        if (_pendingCueAction is not null)
+        {
+            if (_replacementQueue.Count > 0)
+            {
+                AppendLog(UiText.Current.CueActionCannotBatch);
+                return;
+            }
+
+            await ExportCueActionAsync(acbPath, awbPath, outputDirectory, _pendingCueAction);
+            return;
+        }
+
         var jobs = BuildReplacementJobs(wavPath);
         if (jobs.Count == 0)
         {
@@ -722,6 +740,50 @@ public sealed partial class MainWindow : Window
         });
     }
 
+    private async Task ExportCueActionAsync(string acbPath, string awbPath, string outputDirectory, CueAction action)
+    {
+        var targetAcb = BuildExportPath(outputDirectory, acbPath, ".acb");
+        var targetAwb = BuildExportPath(outputDirectory, awbPath, ".awb");
+        if (IsSamePath(targetAcb, acbPath) || IsSamePath(targetAwb, awbPath) || !await PrepareOverwriteAsync(targetAcb, targetAwb))
+        {
+            return;
+        }
+
+        await RunBusyAsync(async () =>
+        {
+            var command = new List<string> { action.Kind == "rename" ? "rename-acb-cue" : "delete-acb-cue", "--acb", acbPath, "--output", targetAcb, "--cue-name", action.OldName };
+            if (action.Kind == "rename") command.AddRange(["--new-name", action.NewName!]);
+            var result = await RunPythonAsync(command);
+            AppendLog(result.CombinedOutput);
+            if (result.ExitCode != 0) return;
+
+            File.Copy(awbPath, targetAwb, overwrite: true);
+            var streamResult = await RunPythonAsync(["patch-acb-stream-awb", targetAcb, targetAcb, "--awb", targetAwb, "--name", Path.GetFileNameWithoutExtension(awbPath)]);
+            AppendLog(streamResult.CombinedOutput);
+            if (streamResult.ExitCode == 0)
+            {
+                if (KeepReportsCheckBox.IsChecked != true) DeleteExportReports(targetAcb, targetAwb);
+                AppendLog(UiText.Current.Done(targetAcb));
+                AppendLog(UiText.Current.Done(targetAwb));
+                _pendingCueAction = null;
+            }
+        });
+    }
+
+    private async Task<bool> ConfirmCueDeleteAsync(string cueName)
+    {
+        var dialog = new Window { Title = UiText.Current.DeleteEntryTitle, Width = 460, SizeToContent = SizeToContent.Height, CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        var cancel = new Button { Content = UiText.Current.Cancel, MinWidth = 100 };
+        var confirm = new Button { Content = UiText.Current.Delete, MinWidth = 100 };
+        dialog.Content = new StackPanel { Margin = new Avalonia.Thickness(18), Spacing = 14, Children = {
+            new TextBlock { Text = UiText.Current.DeleteEntryPrompt(cueName), TextWrapping = Avalonia.Media.TextWrapping.Wrap },
+            new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { cancel, confirm } }
+        }};
+        cancel.Click += (_, _) => dialog.Close(false);
+        confirm.Click += (_, _) => dialog.Close(true);
+        return await dialog.ShowDialog<bool>(this);
+    }
+
     private string FindCueName(int awbId)
     {
         return _awbEntries.FirstOrDefault(entry => entry.Id == awbId)?.CueNames.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name))
@@ -821,6 +883,45 @@ public sealed partial class MainWindow : Window
 
         AddReplacementToQueue(path, (int)(EntryNumberBox.Value ?? 0));
         SavePreferences();
+    }
+
+    private async void OnRenameEntryClick(object? sender, RoutedEventArgs e)
+    {
+        if (AwbEntriesGrid.SelectedItem is not AwbEntryViewModel entry || string.IsNullOrWhiteSpace(AcbPathTextBox.Text))
+        {
+            AppendLog(UiText.Current.SelectEntryBeforeAction);
+            return;
+        }
+
+        var currentName = entry.CueNames.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? entry.Name;
+        var newName = await PromptForTextAsync(UiText.Current.RenameEntryTitle, UiText.Current.RenameEntryPrompt, currentName);
+        if (string.IsNullOrWhiteSpace(newName) || string.Equals(newName, currentName, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _pendingCueAction = new CueAction("rename", entry.Id, currentName, newName);
+        AppendLog(UiText.Current.CueActionQueued(newName, "rename"));
+        UpdateCommandPreview();
+    }
+
+    private async void OnDeleteEntryClick(object? sender, RoutedEventArgs e)
+    {
+        if (AwbEntriesGrid.SelectedItem is not AwbEntryViewModel entry || string.IsNullOrWhiteSpace(AcbPathTextBox.Text))
+        {
+            AppendLog(UiText.Current.SelectEntryBeforeAction);
+            return;
+        }
+
+        var name = entry.CueNames.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? entry.Name;
+        if (!await ConfirmCueDeleteAsync(name))
+        {
+            return;
+        }
+
+        _pendingCueAction = new CueAction("delete", entry.Id, name, null);
+        AppendLog(UiText.Current.CueActionQueued(name, "delete"));
+        UpdateCommandPreview();
     }
 
     private void OnAddReplacementClick(object? sender, RoutedEventArgs e)
@@ -937,7 +1038,12 @@ public sealed partial class MainWindow : Window
 
             WavPathTextBox.Text = path;
             var selectorMode = SelectorModeComboBox.SelectedIndex == 0 ? "--id" : "--index";
-            if (!TryGetFirstAvailableReplacementEntry(selectorMode, out var entry))
+            var selectedEntry = AwbEntriesGrid.SelectedItem as AwbEntryViewModel;
+            var selectedValue = selectorMode == "--id" ? selectedEntry?.Id : selectedEntry?.Index;
+            var entry = selectedValue is int selected && IsReplacementEntryAvailable(selectorMode, selected)
+                ? selected
+                : -1;
+            if (entry < 0 && !TryGetFirstAvailableReplacementEntry(selectorMode, out entry))
             {
                 AppendLog(UiText.Current.NoAvailableReplacementEntry);
                 continue;
@@ -2451,6 +2557,7 @@ public sealed partial class MainWindow : Window
     }
 
     private sealed record NewEntryRequest(string CueName, int TemplateAwbId, string AudioPath);
+    private sealed record CueAction(string Kind, int AwbId, string OldName, string? NewName);
 
     private sealed class ReplacementQueueItem(
         string selectorMode,
@@ -2509,6 +2616,8 @@ public sealed partial class MainWindow : Window
             PlayEntry = "Reproducir",
             Replace = "Sustituir",
             AddEntry = "Nueva entrada",
+            Rename = "Renombrar",
+            Delete = "Eliminar",
             Remove = "Quitar",
             Clear = "Limpiar",
             Loop = "3. Reproductor y loop",
@@ -2557,6 +2666,13 @@ public sealed partial class MainWindow : Window
             UpdatingBankInfo = "Actualizando datos del banco...",
             PickReplacementAudioTitle = "Seleccionar audio de reemplazo",
             PickNewEntryAudioTitle = "Seleccionar audio para la nueva entrada",
+            SelectEntryBeforeAction = "Selecciona una entrada antes de realizar esta acción.",
+            RenameEntryTitle = "Renombrar entrada",
+            RenameEntryPrompt = "Escribe el nuevo nombre del cue:",
+            DeleteEntryTitle = "Eliminar entrada",
+            DeleteEntryPrompt = cue => $"¿Quieres eliminar el cue «{cue}»? El audio AWB se conservará como espacio no utilizado.",
+            CueActionCannotBatch = "Las acciones de cue se exportan por separado; limpia la cola de sustituciones antes de exportar.",
+            CueActionQueued = (name, action) => $"Acción en cola: {action} «{name}».",
             NewEntryNameTitle = "Nombre de la nueva entrada",
             NewEntryNamePrompt = "Escribe el nombre exacto del cue nuevo:",
             SelectBankBeforeNewEntry = "Carga y lee un banco ACB/AWB antes de añadir una entrada nueva.",
@@ -2595,6 +2711,8 @@ public sealed partial class MainWindow : Window
             PlayEntry = "Play",
             Replace = "Replace",
             AddEntry = "New entry",
+            Rename = "Rename",
+            Delete = "Delete",
             Remove = "Remove",
             Clear = "Clear",
             Loop = "3. Player and loop",
@@ -2643,6 +2761,13 @@ public sealed partial class MainWindow : Window
             UpdatingBankInfo = "Updating bank data...",
             PickReplacementAudioTitle = "Select replacement audio",
             PickNewEntryAudioTitle = "Select audio for the new entry",
+            SelectEntryBeforeAction = "Select an entry before performing this action.",
+            RenameEntryTitle = "Rename entry",
+            RenameEntryPrompt = "Enter the new cue name:",
+            DeleteEntryTitle = "Delete entry",
+            DeleteEntryPrompt = cue => $"Delete cue \"{cue}\"? The AWB audio will remain as unused space.",
+            CueActionCannotBatch = "Cue actions are exported separately. Clear the replacement queue before exporting.",
+            CueActionQueued = (name, action) => $"Queued action: {action} \"{name}\".",
             NewEntryNameTitle = "New entry name",
             NewEntryNamePrompt = "Enter the exact name for the new cue:",
             SelectBankBeforeNewEntry = "Load and read an ACB/AWB bank before adding a new entry.",
@@ -2679,6 +2804,8 @@ public sealed partial class MainWindow : Window
         public string PlayEntry { get; init; } = "";
         public string Replace { get; init; } = "";
         public string AddEntry { get; init; } = "";
+        public string Rename { get; init; } = "";
+        public string Delete { get; init; } = "";
         public string Remove { get; init; } = "";
         public string Clear { get; init; } = "";
         public string Loop { get; init; } = "";
@@ -2727,6 +2854,13 @@ public sealed partial class MainWindow : Window
         public string UpdatingBankInfo { get; init; } = "";
         public string PickReplacementAudioTitle { get; init; } = "";
         public string PickNewEntryAudioTitle { get; init; } = "";
+        public string SelectEntryBeforeAction { get; init; } = "";
+        public string RenameEntryTitle { get; init; } = "";
+        public string RenameEntryPrompt { get; init; } = "";
+        public string DeleteEntryTitle { get; init; } = "";
+        public Func<string, string> DeleteEntryPrompt { get; init; } = _ => "";
+        public string CueActionCannotBatch { get; init; } = "";
+        public Func<string, string, string> CueActionQueued { get; init; } = (_, _) => "";
         public string NewEntryNameTitle { get; init; } = "";
         public string NewEntryNamePrompt { get; init; } = "";
         public string SelectBankBeforeNewEntry { get; init; } = "";

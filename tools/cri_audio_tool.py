@@ -2351,6 +2351,54 @@ def cmd_add_acb_awb_hca(args: argparse.Namespace) -> None:
     print(json.dumps({"acb": str(target_acb), "awb": str(target_awb), "name": args.name, "awb_id": args.awb_id, "new_cue_index": new_cue_index, "new_waveform_index": new_waveform_index}, ensure_ascii=False, indent=2))
 
 
+def cmd_rename_acb_cue(args: argparse.Namespace) -> None:
+    source = Path(args.acb)
+    target = Path(args.output)
+    root = parse_utf(read_cri(source))
+    nested = root.nested_tables()
+    table = nested.get("CueNameTable")
+    if table is None:
+        raise ValueError("ACB has no CueNameTable")
+    matches = [row for row in table.rows if field_by_name(row, "CueName") and field_by_name(row, "CueName").value == args.cue_name]
+    if len(matches) != 1:
+        raise ValueError(f"Expected one cue named {args.cue_name!r}, found {len(matches)}")
+    if any(field_by_name(row, "CueName") and field_by_name(row, "CueName").value == args.new_name for row in table.rows):
+        raise ValueError(f"Cue name already exists: {args.new_name}")
+    set_utf_value(matches[0], "CueName", args.new_name)
+    output = replace_nested_utf(root, {name: serialize_utf(value) for name, value in nested.items()})
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(output)
+    print(json.dumps({"acb": str(target), "old_name": args.cue_name, "new_name": args.new_name}, ensure_ascii=False, indent=2))
+
+
+def cmd_delete_acb_cue(args: argparse.Namespace) -> None:
+    source = Path(args.acb)
+    target = Path(args.output)
+    root = parse_utf(read_cri(source))
+    nested = root.nested_tables()
+    name_table = nested.get("CueNameTable")
+    cue_table = nested.get("CueTable")
+    if name_table is None or cue_table is None:
+        raise ValueError("ACB is missing CueNameTable or CueTable")
+    matches = [(index, row) for index, row in enumerate(name_table.rows) if field_by_name(row, "CueName") and field_by_name(row, "CueName").value == args.cue_name]
+    if len(matches) != 1:
+        raise ValueError(f"Expected one cue named {args.cue_name!r}, found {len(matches)}")
+    _, name_row = matches[0]
+    cue_index = int_value(name_row, "CueIndex")
+    if cue_index is None or cue_index >= len(cue_table.rows):
+        raise ValueError("CueIndex is invalid")
+    name_table.rows.remove(name_row)
+    cue_table.rows.pop(cue_index)
+    for row in name_table.rows:
+        index = int_value(row, "CueIndex")
+        if index is not None and index > cue_index:
+            set_utf_value(row, "CueIndex", index - 1)
+    output = replace_nested_utf(root, {name: serialize_utf(value) for name, value in nested.items()})
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(output)
+    print(json.dumps({"acb": str(target), "deleted_name": args.cue_name, "cue_index": cue_index, "awb_payload_preserved": True}, ensure_ascii=False, indent=2))
+
+
 def cmd_patch_acb_stream_awb(args: argparse.Namespace) -> None:
     source = Path(args.source)
     target = Path(args.target)
@@ -2553,6 +2601,19 @@ def build_parser() -> argparse.ArgumentParser:
     add_entry_parser.add_argument("--sample-rate", type=int)
     add_entry_parser.add_argument("--length-ms", type=int, required=True)
     add_entry_parser.set_defaults(func=cmd_add_acb_awb_hca)
+
+    rename_parser = subparsers.add_parser("rename-acb-cue", help="Rename one cue in an ACB.")
+    rename_parser.add_argument("--acb", required=True)
+    rename_parser.add_argument("--output", required=True)
+    rename_parser.add_argument("--cue-name", required=True)
+    rename_parser.add_argument("--new-name", required=True)
+    rename_parser.set_defaults(func=cmd_rename_acb_cue)
+
+    delete_parser = subparsers.add_parser("delete-acb-cue", help="Remove one cue row from an ACB.")
+    delete_parser.add_argument("--acb", required=True)
+    delete_parser.add_argument("--output", required=True)
+    delete_parser.add_argument("--cue-name", required=True)
+    delete_parser.set_defaults(func=cmd_delete_acb_cue)
 
     return parser
 
