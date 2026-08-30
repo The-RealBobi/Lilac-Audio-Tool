@@ -151,6 +151,7 @@
                     IsReadOnly="True"
                     CanUserResizeColumns="True"
                     GridLinesVisibility="Horizontal"
+                    PointerPressed="OnAwbEntriesPointerPressed"
                     SelectionChanged="OnAwbEntrySelectionChanged">
             <DataGrid.ContextMenu>
               <ContextMenu>

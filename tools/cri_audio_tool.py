@@ -2371,6 +2371,109 @@ def cmd_rename_acb_cue(args: argparse.Namespace) -> None:
     print(json.dumps({"acb": str(target), "old_name": args.cue_name, "new_name": args.new_name}, ensure_ascii=False, indent=2))
 
 
+def cmd_redirect_acb_cue_awb_hca(args: argparse.Namespace) -> None:
+    source_acb = Path(args.acb)
+    source_awb = Path(args.awb)
+    target_acb = Path(args.output_acb)
+    target_awb = Path(args.output_awb)
+    hca = Path(args.hca).read_bytes()
+    if not hca.startswith(HCA_MAGIC):
+        raise ValueError("The redirected entry must be a plain HCA file")
+    archive = parse_awb(read_cri(source_awb))
+    if any(entry.id == args.awb_id for entry in archive.entries):
+        raise ValueError(f"AWB ID {args.awb_id} already exists")
+
+    root = parse_utf(read_cri(source_acb))
+    nested = root.nested_tables()
+    required = ["CueNameTable", "CueTable", "WaveformTable", "SequenceTable", "SynthTable", "TrackTable", "TrackEventTable"]
+    missing = [name for name in required if name not in nested]
+    if missing:
+        raise ValueError(f"ACB is missing required tables: {', '.join(missing)}")
+    name_table = nested["CueNameTable"]
+    cue_table = nested["CueTable"]
+    name_row = next((row for row in name_table.rows if field_by_name(row, "CueName") and field_by_name(row, "CueName").value == args.cue_name), None)
+    if name_row is None:
+        raise ValueError(f"Cue name not found: {args.cue_name}")
+    cue_index = int_value(name_row, "CueIndex")
+    if cue_index is None or cue_index >= len(cue_table.rows):
+        raise ValueError("CueIndex is invalid")
+    cue = cue_table.rows[cue_index]
+    sequence_index = int_value(cue, "ReferenceIndex")
+    if int_value(cue, "ReferenceType") != 3 or sequence_index is None:
+        raise ValueError("Cue is not a sequence cue")
+    sequence_table = nested["SequenceTable"]
+    sequence = sequence_table.rows[sequence_index]
+    track_field = field_by_name(sequence, "TrackIndex")
+    track_indices = read_be_u16_items(track_field.value, int_value(sequence, "NumTracks") or 0) if track_field else []
+    if len(track_indices) != 1:
+        raise ValueError("Only one-track cues are supported")
+    old_track_index = track_indices[0]
+    track_table = nested["TrackTable"]
+    old_track = track_table.rows[old_track_index]
+    old_event_index = int_value(old_track, "EventIndex")
+    if old_event_index is None:
+        raise ValueError("Cue track has no event")
+    event_table = nested["TrackEventTable"]
+    old_event = event_table.rows[old_event_index]
+    synth_indices = command_synth_indices(field_by_name(old_event, "Command").value)
+    if len(synth_indices) != 1:
+        raise ValueError("Only one-synth cues are supported")
+    old_synth_index = synth_indices[0]
+    synth_table = nested["SynthTable"]
+    old_synth = synth_table.rows[old_synth_index]
+    waveform_indices = resolve_cue_waveforms(cue, nested["WaveformTable"], sequence_table, synth_table, track_table, event_table, nested.get("SeqCommandTable"))
+    if len(waveform_indices) != 1:
+        raise ValueError("Only one-waveform cues are supported")
+
+    new_waveform_index = len(nested["WaveformTable"].rows)
+    new_synth_index = len(synth_table.rows)
+    new_event_index = len(event_table.rows)
+    new_track_index = len(track_table.rows)
+    new_sequence_index = len(sequence_table.rows)
+    waveform = clone_utf_row(nested["WaveformTable"].rows[waveform_indices[0]])
+    set_utf_value(waveform, "StreamAwbId", args.awb_id)
+    set_utf_value(waveform, "NumSamples", args.samples)
+    if args.channels is not None: set_utf_value(waveform, "NumChannels", args.channels)
+    if args.sample_rate is not None: set_utf_value(waveform, "SamplingRate", args.sample_rate)
+    set_utf_value(waveform, "LoopFlag", 1)
+    synth = clone_utf_row(old_synth)
+    set_utf_value(synth, "ReferenceItems", patch_be_u16_items(field_by_name(synth, "ReferenceItems").value, {waveform_indices[0]: new_waveform_index}))
+    event = clone_utf_row(old_event)
+    set_utf_value(event, "Command", patch_track_event_synth(field_by_name(event, "Command").value, {old_synth_index: new_synth_index}))
+    track = clone_utf_row(old_track)
+    set_utf_value(track, "EventIndex", new_event_index)
+    new_sequence = clone_utf_row(sequence)
+    set_utf_value(new_sequence, "TrackIndex", struct.pack(">H", new_track_index))
+    set_utf_value(cue, "ReferenceIndex", new_sequence_index)
+    set_utf_value(cue, "Length", args.length_ms)
+
+    nested["WaveformTable"].rows.append(waveform)
+    synth_table.rows.append(synth)
+    event_table.rows.append(event)
+    track_table.rows.append(track)
+    sequence_table.rows.append(new_sequence)
+
+    output_awb_data = build_awb(archive, [*archive.entries, AwbEntry(len(archive.entries), args.awb_id, 0, hca)])
+    final_archive = parse_awb(output_awb_data)
+    awb_header_size = 0x10 + len(final_archive.entries) * final_archive.id_size + (len(final_archive.entries) + 1) * final_archive.offset_size
+    header_table = nested.get("StreamAwbAfs2Header")
+    if header_table and header_table.rows:
+        header = field_by_name(header_table.rows[0], "Header")
+        if header is not None: set_utf_value(header_table.rows[0], "Header", output_awb_data[:awb_header_size])
+    output_acb_data = bytearray(replace_nested_utf(root, {name: serialize_utf(value) for name, value in nested.items()}))
+    awb_md5 = hashlib.md5(output_awb_data).digest()
+    result_nested = parse_utf(bytes(output_acb_data)).nested_tables()
+    for row in result_nested.get("StreamAwbHash", UtfTable("", [])).rows:
+        field = field_by_name(row, "Hash")
+        if field is not None and len(field.value) == len(awb_md5): output_acb_data[field.offset:field.offset + len(awb_md5)] = awb_md5
+    for row in result_nested.get("StreamAwbAfs2Header", UtfTable("", [])).rows:
+        field = field_by_name(row, "Header")
+        if field is not None and isinstance(field.value, bytes): output_acb_data[field.offset:field.offset + len(field.value)] = output_awb_data[:len(field.value)]
+    target_awb.parent.mkdir(parents=True, exist_ok=True); target_awb.write_bytes(output_awb_data)
+    target_acb.parent.mkdir(parents=True, exist_ok=True); target_acb.write_bytes(output_acb_data)
+    print(json.dumps({"acb": str(target_acb), "awb": str(target_awb), "cue_name": args.cue_name, "awb_id": args.awb_id, "new_waveform_index": new_waveform_index}, ensure_ascii=False, indent=2))
+
+
 def cmd_delete_acb_cue(args: argparse.Namespace) -> None:
     source = Path(args.acb)
     target = Path(args.output)
@@ -2614,6 +2717,23 @@ def build_parser() -> argparse.ArgumentParser:
     delete_parser.add_argument("--output", required=True)
     delete_parser.add_argument("--cue-name", required=True)
     delete_parser.set_defaults(func=cmd_delete_acb_cue)
+
+    redirect_parser = subparsers.add_parser(
+        "redirect-acb-cue-awb-hca",
+        help="Add an AWB payload and redirect one existing cue to it.",
+    )
+    redirect_parser.add_argument("--acb", required=True)
+    redirect_parser.add_argument("--awb", required=True)
+    redirect_parser.add_argument("--hca", required=True)
+    redirect_parser.add_argument("--output-acb", required=True)
+    redirect_parser.add_argument("--output-awb", required=True)
+    redirect_parser.add_argument("--cue-name", required=True)
+    redirect_parser.add_argument("--awb-id", required=True, type=lambda value: int(value, 0))
+    redirect_parser.add_argument("--samples", type=int, required=True)
+    redirect_parser.add_argument("--channels", type=int)
+    redirect_parser.add_argument("--sample-rate", type=int)
+    redirect_parser.add_argument("--length-ms", type=int, required=True)
+    redirect_parser.set_defaults(func=cmd_redirect_acb_cue_awb_hca)
 
     return parser
 

@@ -52,6 +52,7 @@ public sealed partial class MainWindow : Window
     private bool _playbackLoops;
     private TimelineDragMode _timelineDragMode = TimelineDragMode.None;
     private NewEntryRequest? _newEntryRequest;
+    private RedirectEntryRequest? _redirectEntryRequest;
     private CueAction? _pendingCueAction;
 
     public MainWindow()
@@ -198,23 +199,30 @@ public sealed partial class MainWindow : Window
         SavePreferences();
         StopPlayback();
         _soundFlowPlayer.Dispose();
-        ClearPreviewCache();
+        ClearSessionTemporaryFiles();
         base.OnClosed(e);
     }
 
-    private void ClearPreviewCache()
+    private void ClearSessionTemporaryFiles()
     {
-        var previewCache = Path.Combine(_dataRoot, ".cache", "previews");
+        var workRoot = Path.Combine(_dataRoot, "work");
+        var paths = new List<string> { Path.Combine(_dataRoot, ".cache", "previews") };
         try
         {
-            if (Directory.Exists(previewCache))
+            if (Directory.Exists(workRoot))
             {
-                Directory.Delete(previewCache, recursive: true);
+                paths.AddRange(Directory.EnumerateDirectories(workRoot)
+                    .Where(path =>
+                        Path.GetFileName(path).Equals("preview", StringComparison.OrdinalIgnoreCase) ||
+                        Path.GetFileName(path).StartsWith("new-entry-", StringComparison.OrdinalIgnoreCase) ||
+                        Path.GetFileName(path).StartsWith("redirect-entry-", StringComparison.OrdinalIgnoreCase)));
             }
         }
-        catch
+        catch { }
+
+        foreach (var path in paths)
         {
-            // Cache cleanup should never prevent the app from closing.
+            try { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); } catch { }
         }
     }
 
@@ -335,11 +343,22 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        _newEntryRequest = new NewEntryRequest(cueName.Trim(), template.Id, audioPath);
+        var normalizedCueName = cueName.Trim();
+        if (_awbEntries.Any(entry => entry.CueNames.Contains(normalizedCueName, StringComparer.Ordinal)))
+        {
+            _redirectEntryRequest = new RedirectEntryRequest(normalizedCueName, template.Id, audioPath);
+            _newEntryRequest = null;
+            AppendLog(UiText.Current.RedirectEntryQueued(normalizedCueName, template.Id));
+        }
+        else
+        {
+            _newEntryRequest = new NewEntryRequest(normalizedCueName, template.Id, audioPath);
+            _redirectEntryRequest = null;
+            AppendLog(UiText.Current.NewEntryQueued(normalizedCueName, template.Id));
+        }
         WavPathTextBox.Text = audioPath;
         await LoadWavInfoAsync(audioPath);
         SetPlayerSource(audioPath);
-        AppendLog(UiText.Current.NewEntryQueued(cueName.Trim(), template.Id));
         SavePreferences();
         UpdateCommandPreview();
     }
@@ -490,6 +509,18 @@ public sealed partial class MainWindow : Window
             }
 
             await ExportNewEntryAsync(acbPath, awbPath, outputDirectory, _newEntryRequest);
+            return;
+        }
+
+        if (_redirectEntryRequest is not null)
+        {
+            if (_replacementQueue.Count > 0)
+            {
+                AppendLog(UiText.Current.NewEntryCannotBatch);
+                return;
+            }
+
+            await ExportRedirectEntryAsync(acbPath, awbPath, outputDirectory, _redirectEntryRequest);
             return;
         }
 
@@ -740,6 +771,52 @@ public sealed partial class MainWindow : Window
         });
     }
 
+    private async Task ExportRedirectEntryAsync(string acbPath, string awbPath, string outputDirectory, RedirectEntryRequest request)
+    {
+        var targetAwb = BuildExportPath(outputDirectory, awbPath, ".awb");
+        var targetAcb = BuildExportPath(outputDirectory, acbPath, ".acb");
+        if (IsSamePath(targetAcb, acbPath) || IsSamePath(targetAwb, awbPath) || !await PrepareOverwriteAsync(targetAcb, targetAwb)) return;
+
+        await RunBusyAsync(async () =>
+        {
+            var stage = Path.Combine(_dataRoot, "work", $"redirect-entry-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(stage);
+            try
+            {
+                var encodedAwb = Path.Combine(stage, "encoded.awb");
+                var encodeResult = await RunPythonAsync(["replace-awb-wav", awbPath, encodedAwb, request.AudioPath, "--id", request.TemplateAwbId.ToString(), "--no-loop", "--keep-hca"]);
+                AppendLog(encodeResult.CombinedOutput);
+                if (encodeResult.ExitCode != 0) return;
+                var report = LoadReplaceReport(encodedAwb);
+                var result = await RunPythonAsync([
+                    "redirect-acb-cue-awb-hca", "--acb", acbPath, "--awb", awbPath,
+                    "--hca", encodedAwb + ".replacement.hca", "--output-acb", targetAcb, "--output-awb", targetAwb,
+                    "--cue-name", request.CueName, "--awb-id", FindNextAwbId().ToString(),
+                    "--samples", report.EffectiveSampleCount.ToString(),
+                    "--channels", (report.PreparedWavInfo?.Channels ?? _wavChannels).ToString(),
+                    "--sample-rate", (report.PreparedWavInfo?.SampleRate ?? _wavSampleRate).ToString(),
+                    "--length-ms", Math.Max(1, (int)Math.Round(report.EffectiveSampleCount * 1000d / Math.Max(1, report.PreparedWavInfo?.SampleRate ?? _wavSampleRate))).ToString()
+                ]);
+                AppendLog(result.CombinedOutput);
+                if (result.ExitCode != 0) return;
+                var stream = await RunPythonAsync(["patch-acb-stream-awb", targetAcb, targetAcb, "--awb", targetAwb, "--name", Path.GetFileNameWithoutExtension(awbPath)]);
+                AppendLog(stream.CombinedOutput);
+                if (stream.ExitCode == 0)
+                {
+                    if (KeepReportsCheckBox.IsChecked != true) DeleteExportReports(targetAcb, targetAwb);
+                    _redirectEntryRequest = null;
+                    AppendLog(UiText.Current.RedirectEntryExported(request.CueName));
+                    AppendLog(UiText.Current.Done(targetAcb));
+                    AppendLog(UiText.Current.Done(targetAwb));
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(stage, true); } catch { }
+            }
+        });
+    }
+
     private async Task ExportCueActionAsync(string acbPath, string awbPath, string outputDirectory, CueAction action)
     {
         var targetAcb = BuildExportPath(outputDirectory, acbPath, ".acb");
@@ -869,6 +946,25 @@ public sealed partial class MainWindow : Window
         UpdateCommandPreview();
     }
 
+    private void OnAwbEntriesPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (e.GetCurrentPoint(AwbEntriesGrid).Properties.PointerUpdateKind != PointerUpdateKind.RightButtonPressed)
+        {
+            return;
+        }
+
+        var control = e.Source as Control;
+        while (control is not null && control is not DataGridRow)
+        {
+            control = control.Parent as Control;
+        }
+
+        if (control is DataGridRow row && row.DataContext is AwbEntryViewModel entry)
+        {
+            AwbEntriesGrid.SelectedItem = entry;
+        }
+    }
+
     private async void OnSubstituteClick(object? sender, RoutedEventArgs e)
     {
         var path = await PickFileAsync(UiText.Current.PickReplacementAudioTitle, [new FilePickerFileType("Audio") { Patterns = ["*.wav", "*.flac", "*.ogg", "*.mp3", "*.m4a", "*.aac", "*.aiff", "*.aif"] }]);
@@ -976,6 +1072,9 @@ public sealed partial class MainWindow : Window
     private void OnClearReplacementsClick(object? sender, RoutedEventArgs e)
     {
         _replacementQueue.Clear();
+        _newEntryRequest = null;
+        _redirectEntryRequest = null;
+        _pendingCueAction = null;
         UpdateCommandPreview();
     }
 
@@ -2027,7 +2126,13 @@ public sealed partial class MainWindow : Window
             : _awbEntries.FirstOrDefault(item => item.Index == (int)(EntryNumberBox.Value ?? 0))?.Id.ToString() ?? "?";
         var count = _replacementQueue.Count == 0 ? 1 : _replacementQueue.Count;
         CommandPreviewTextBlock.Text = count == 1
-            ? UiText.Current.SingleReplacementPreview(selectorMode == "--id" ? "ID" : UiText.Current.Index, selectorValue, patchIdText)
+            ? _redirectEntryRequest is not null
+                ? UiText.Current.RedirectPreview(_redirectEntryRequest.CueName)
+                : _newEntryRequest is not null
+                    ? UiText.Current.NewEntryPreview(_newEntryRequest.CueName)
+                    : _pendingCueAction is not null
+                        ? UiText.Current.CueActionPreview(_pendingCueAction.Kind, _pendingCueAction.OldName)
+                        : UiText.Current.SingleReplacementPreview(selectorMode == "--id" ? "ID" : UiText.Current.Index, selectorValue, patchIdText)
             : UiText.Current.BatchReplacementPreview(count);
     }
 
@@ -2557,6 +2662,7 @@ public sealed partial class MainWindow : Window
     }
 
     private sealed record NewEntryRequest(string CueName, int TemplateAwbId, string AudioPath);
+    private sealed record RedirectEntryRequest(string CueName, int TemplateAwbId, string AudioPath);
     private sealed record CueAction(string Kind, int AwbId, string OldName, string? NewName);
 
     private sealed class ReplacementQueueItem(
@@ -2679,6 +2785,11 @@ public sealed partial class MainWindow : Window
             NewEntryCannotBatch = "La nueva entrada se exporta por separado; limpia la cola de sustituciones antes de exportar.",
             TemplateNameMissing = "La entrada elegida no tiene un nombre de cue utilizable.",
             NewEntryExported = cue => $"Nueva entrada exportada: {cue}",
+            RedirectEntryQueued = (cue, id) => $"Redirección en cola: {cue} (nuevo audio desde la plantilla ID {id})",
+            RedirectEntryExported = cue => $"Audio nuevo asignado al cue: {cue}",
+            RedirectPreview = cue => $"Se añadirá un audio nuevo y se redirigirá el cue «{cue}».",
+            NewEntryPreview = cue => $"Se añadirá la nueva entrada «{cue}».",
+            CueActionPreview = (action, cue) => $"Se exportará la acción {action} para «{cue}».",
             Accept = "Aceptar",
             SelectReplacementBeforeQueue = "Selecciona un audio de reemplazo antes de añadirlo a la cola.",
             AudioMetadataMissing = "No se pudo leer la duración directamente. Se normalizará al exportar.",
@@ -2774,6 +2885,11 @@ public sealed partial class MainWindow : Window
             NewEntryCannotBatch = "The new entry is exported separately. Clear the replacement queue before exporting.",
             TemplateNameMissing = "The selected entry has no usable cue name.",
             NewEntryExported = cue => $"New entry exported: {cue}",
+            RedirectEntryQueued = (cue, id) => $"Redirect queued: {cue} (new audio from template ID {id})",
+            RedirectEntryExported = cue => $"New audio assigned to cue: {cue}",
+            RedirectPreview = cue => $"A new audio payload will be added and cue \"{cue}\" will be redirected.",
+            NewEntryPreview = cue => $"New entry \"{cue}\" will be added.",
+            CueActionPreview = (action, cue) => $"The {action} action for \"{cue}\" will be exported.",
             Accept = "Accept",
             SelectReplacementBeforeQueue = "Select replacement audio before adding it to the queue.",
             AudioMetadataMissing = "Duration could not be read directly. The file will be normalized on export.",
@@ -2867,6 +2983,11 @@ public sealed partial class MainWindow : Window
         public string NewEntryCannotBatch { get; init; } = "";
         public string TemplateNameMissing { get; init; } = "";
         public Func<string, string> NewEntryExported { get; init; } = _ => "";
+        public Func<string, int, string> RedirectEntryQueued { get; init; } = (_, _) => "";
+        public Func<string, string> RedirectEntryExported { get; init; } = _ => "";
+        public Func<string, string> RedirectPreview { get; init; } = _ => "";
+        public Func<string, string> NewEntryPreview { get; init; } = _ => "";
+        public Func<string, string, string> CueActionPreview { get; init; } = (_, _) => "";
         public string Accept { get; init; } = "";
         public string SelectReplacementBeforeQueue { get; init; } = "";
         public string AudioMetadataMissing { get; init; } = "";
