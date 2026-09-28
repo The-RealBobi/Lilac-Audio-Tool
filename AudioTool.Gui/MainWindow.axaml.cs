@@ -35,6 +35,8 @@ public sealed partial class MainWindow : Window
     private bool _loadingPreferences;
     private bool _updatingLoopControls;
     private int? _editingReplacementEntry;
+    private string _lastSourceDirectory = "";
+    private string _lastEntryExportDirectory = "";
     private int _wavSamples;
     private int _wavSampleRate;
     private int _wavChannels;
@@ -101,9 +103,11 @@ public sealed partial class MainWindow : Window
         SubstituteButton.Content = strings.Replace;
         RenameEntryButton.Content = strings.Rename;
         DeleteEntryButton.Content = strings.Delete;
+        ExportEntriesButton.Content = strings.ExportEntries;
         ContextSubstituteItem.Header = strings.Replace;
         ContextRenameItem.Header = strings.Rename;
         ContextDeleteItem.Header = strings.Delete;
+        ContextExportEntriesItem.Header = strings.ExportEntries;
         RemoveReplacementButton.Content = strings.Remove;
         ClearReplacementsButton.Content = strings.Clear;
         LoopHeaderTextBlock.Text = strings.Loop;
@@ -272,6 +276,86 @@ public sealed partial class MainWindow : Window
             SavePreferences();
             UpdateCommandPreview();
         }
+    }
+
+    private async void OnExportEntriesClick(object? sender, RoutedEventArgs e)
+    {
+        var entries = AwbEntriesGrid.SelectedItems.OfType<AwbEntryViewModel>().OrderBy(entry => entry.Index).ToList();
+        if (entries.Count == 0 || string.IsNullOrWhiteSpace(AwbPathTextBox.Text) || !File.Exists(AwbPathTextBox.Text))
+        {
+            AppendLog(UiText.Current.SelectAwbBeforeExport);
+            return;
+        }
+
+        var outputDirectory = await PickEntryExportDirectoryAsync();
+        if (string.IsNullOrWhiteSpace(outputDirectory))
+        {
+            return;
+        }
+
+        var decodedFiles = new List<(string Source, string Target)>();
+        await RunBusyAsync(async () =>
+        {
+            Directory.CreateDirectory(outputDirectory);
+            var previewDirectory = Path.Combine(_dataRoot, "work", "preview");
+            foreach (var entry in entries)
+            {
+                var target = Path.Combine(outputDirectory, EntryWavFileName(entry));
+                var args = new List<string> { "preview-awb-entry", AwbPathTextBox.Text!, "--output", previewDirectory, "--id", entry.Id.ToString() };
+                if (!string.IsNullOrWhiteSpace(AcbPathTextBox.Text) && File.Exists(AcbPathTextBox.Text))
+                {
+                    args.Add("--acb");
+                    args.Add(AcbPathTextBox.Text!);
+                }
+
+                var result = await RunPythonAsync(args);
+                AppendLog(result.CombinedOutput);
+                if (result.ExitCode != 0)
+                {
+                    return;
+                }
+
+                var preview = JsonSerializer.Deserialize<PreviewReport>(result.Stdout, JsonOptions());
+                if (string.IsNullOrWhiteSpace(preview?.Wav) || !File.Exists(preview.Wav))
+                {
+                    AppendLog(UiText.Current.PreviewFailed);
+                    return;
+                }
+
+                decodedFiles.Add((preview.Wav, target));
+            }
+
+            var existing = decodedFiles.Select(file => file.Target).Where(File.Exists).ToList();
+            if (existing.Count > 0 && !await ConfirmOverwriteAsync(existing))
+            {
+                AppendLog(UiText.Current.OverwriteCancelled);
+                return;
+            }
+            foreach (var (source, target) in decodedFiles)
+            {
+                File.Copy(source, target, overwrite: true);
+                AppendLog(UiText.Current.EntryWavExported(target));
+            }
+        });
+    }
+
+    private static string EntryWavFileName(AwbEntryViewModel entry)
+    {
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        var safeName = string.Concat(entry.PrimaryCue.Select(character => invalid.Contains(character) ? '_' : character)).Trim().TrimEnd('.');
+        return $"{entry.Index:D4}_{entry.Id:D5}_{(string.IsNullOrWhiteSpace(safeName) ? entry.Id.ToString() : safeName)}.wav";
+    }
+
+    private async Task<string?> PickEntryExportDirectoryAsync()
+    {
+        var start = Directory.Exists(_lastEntryExportDirectory) ? _lastEntryExportDirectory : _lastSourceDirectory;
+        var directory = await PickDirectoryAsync(UiText.Current.PickEntryExportTitle, start);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            _lastEntryExportDirectory = directory;
+            SavePreferences();
+        }
+        return directory;
     }
 
     private async void OnInspectAwbClick(object? sender, RoutedEventArgs e)
@@ -959,7 +1043,7 @@ public sealed partial class MainWindow : Window
             control = control.Parent as Control;
         }
 
-        if (control is DataGridRow row && row.DataContext is AwbEntryViewModel entry)
+        if (control is DataGridRow row && row.DataContext is AwbEntryViewModel entry && !AwbEntriesGrid.SelectedItems.Contains(entry))
         {
             AwbEntriesGrid.SelectedItem = entry;
         }
@@ -2138,32 +2222,39 @@ public sealed partial class MainWindow : Window
 
     private async Task<string?> PickFileAsync(string title, IReadOnlyList<FilePickerFileType> filters)
     {
-        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        var options = new FilePickerOpenOptions
         {
             Title = title,
             AllowMultiple = false,
             FileTypeFilter = filters
-        });
-        return files.Count > 0 ? files[0].TryGetLocalPath() : null;
+        };
+        if (Directory.Exists(_lastSourceDirectory) && await StorageProvider.TryGetFolderFromPathAsync(_lastSourceDirectory) is { } start)
+        {
+            options.SuggestedStartLocation = start;
+        }
+        var files = await StorageProvider.OpenFilePickerAsync(options);
+        var path = files.Count > 0 ? files[0].TryGetLocalPath() : null;
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            _lastSourceDirectory = Path.GetDirectoryName(path) ?? "";
+            SavePreferences();
+        }
+        return path;
     }
 
     private async Task<string?> PickOutputDirectoryAsync()
     {
         var start = OutputDirectoryTextBox.Text?.Trim();
-        var options = new FolderPickerOpenOptions
-        {
-            Title = UiText.Current.PickExportFolderTitle,
-            AllowMultiple = false
-        };
-        if (!string.IsNullOrWhiteSpace(start) && Directory.Exists(start))
-        {
-            var folder = await StorageProvider.TryGetFolderFromPathAsync(start);
-            if (folder is not null)
-            {
-                options.SuggestedStartLocation = folder;
-            }
-        }
+        return await PickDirectoryAsync(UiText.Current.PickExportFolderTitle, start);
+    }
 
+    private async Task<string?> PickDirectoryAsync(string title, string? start)
+    {
+        var options = new FolderPickerOpenOptions { Title = title, AllowMultiple = false };
+        if (!string.IsNullOrWhiteSpace(start) && Directory.Exists(start) && await StorageProvider.TryGetFolderFromPathAsync(start) is { } folder)
+        {
+            options.SuggestedStartLocation = folder;
+        }
         var folders = await StorageProvider.OpenFolderPickerAsync(options);
         return folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
     }
@@ -2343,6 +2434,12 @@ public sealed partial class MainWindow : Window
             OutputDirectoryTextBox.Text = string.IsNullOrWhiteSpace(preferences.OutputDirectory)
                 ? Path.Combine(_dataRoot, "work")
                 : preferences.OutputDirectory;
+            _lastSourceDirectory = string.IsNullOrWhiteSpace(preferences.LastSourceDirectory)
+                ? Path.GetDirectoryName(new[] { preferences.AudioPath, preferences.AwbPath, preferences.AcbPath }.FirstOrDefault(path => !string.IsNullOrWhiteSpace(path)) ?? "") ?? ""
+                : preferences.LastSourceDirectory;
+            _lastEntryExportDirectory = string.IsNullOrWhiteSpace(preferences.LastEntryExportDirectory)
+                ? preferences.OutputDirectory ?? ""
+                : preferences.LastEntryExportDirectory;
             SelectorModeComboBox.SelectedIndex = Math.Clamp(preferences.SelectorModeIndex, 0, 1);
             EntryNumberBox.Value = Math.Clamp(preferences.EntryNumber, 0, 999999);
             LoopModeComboBox.SelectedIndex = Math.Clamp(preferences.LoopModeIndex, 0, 2);
@@ -2379,6 +2476,8 @@ public sealed partial class MainWindow : Window
                 AwbPath = AwbPathTextBox.Text?.Trim() ?? "",
                 AudioPath = WavPathTextBox.Text?.Trim() ?? "",
                 OutputDirectory = OutputDirectoryTextBox.Text?.Trim() ?? "",
+                LastSourceDirectory = _lastSourceDirectory,
+                LastEntryExportDirectory = _lastEntryExportDirectory,
                 SelectorModeIndex = Math.Clamp(SelectorModeComboBox.SelectedIndex, 0, 1),
                 EntryNumber = (int)(EntryNumberBox.Value ?? 0),
                 LoopModeIndex = Math.Clamp(LoopModeComboBox.SelectedIndex, 0, 2),
@@ -2386,9 +2485,9 @@ public sealed partial class MainWindow : Window
                 LoopEnd = (int)(LoopEndBox.Value ?? 0),
                 KeepHca = KeepHcaCheckBox.IsChecked == true,
                 KeepReports = KeepReportsCheckBox.IsChecked == true,
-                UseModSuffix = UseModSuffixCheckBox.IsChecked == true
-                ,AwbColumnWidths = ReadColumnWidths(AwbEntriesGrid)
-                ,QueueColumnWidths = ReadColumnWidths(ReplacementQueueGrid)
+                UseModSuffix = UseModSuffixCheckBox.IsChecked == true,
+                AwbColumnWidths = ReadColumnWidths(AwbEntriesGrid),
+                QueueColumnWidths = ReadColumnWidths(ReplacementQueueGrid)
             };
 
             Directory.CreateDirectory(Path.GetDirectoryName(_preferencesPath)!);
@@ -2447,6 +2546,7 @@ public sealed partial class MainWindow : Window
         ExecuteButton.IsEnabled = false;
         InspectAwbButton.IsEnabled = false;
         PreviewEntryButton.IsEnabled = false;
+        ExportEntriesButton.IsEnabled = false;
         try
         {
             await action();
@@ -2456,6 +2556,7 @@ public sealed partial class MainWindow : Window
             ExecuteButton.IsEnabled = true;
             InspectAwbButton.IsEnabled = true;
             PreviewEntryButton.IsEnabled = true;
+            ExportEntriesButton.IsEnabled = true;
         }
     }
 
@@ -2724,6 +2825,7 @@ public sealed partial class MainWindow : Window
             AddEntry = "Nueva entrada",
             Rename = "Renombrar",
             Delete = "Eliminar",
+            ExportEntries = "Exportar WAV",
             Remove = "Quitar",
             Clear = "Limpiar",
             Loop = "3. Reproductor y loop",
@@ -2766,6 +2868,8 @@ public sealed partial class MainWindow : Window
             PluginCheckFailed = "No se pudieron comprobar las herramientas de audio.",
             SelectAwbBeforeInspect = "Selecciona un AWB antes de leer las entradas.",
             SelectAwbBeforePreview = "Selecciona un AWB antes de reproducir una entrada.",
+            SelectAwbBeforeExport = "Selecciona una o varias entradas de un AWB para exportarlas.",
+            EntryWavExported = path => $"WAV exportado: {path}",
             PreviewFailed = "No se pudo preparar la entrada para reproducirla.",
             SelectAudioToPlay = "Selecciona una entrada o un audio de la cola para reproducirlo.",
             AddReplacementRequired = "Añade al menos un reemplazo.",
@@ -2808,7 +2912,8 @@ public sealed partial class MainWindow : Window
             PickAwbTitle = "Seleccionar AWB",
             PickAudioTitle = "Seleccionar audio",
             PickOutputFolderTitle = "Seleccionar carpeta de salida",
-            PickExportFolderTitle = "Seleccionar carpeta de exportación"
+            PickExportFolderTitle = "Seleccionar carpeta de exportación",
+            PickEntryExportTitle = "Seleccionar carpeta para los WAV"
         };
 
         private static UiText English { get; } = new()
@@ -2824,6 +2929,7 @@ public sealed partial class MainWindow : Window
             AddEntry = "New entry",
             Rename = "Rename",
             Delete = "Delete",
+            ExportEntries = "Export WAV",
             Remove = "Remove",
             Clear = "Clear",
             Loop = "3. Player and loop",
@@ -2866,6 +2972,8 @@ public sealed partial class MainWindow : Window
             PluginCheckFailed = "Audio tools could not be checked.",
             SelectAwbBeforeInspect = "Select an AWB before reading entries.",
             SelectAwbBeforePreview = "Select an AWB before playing an entry.",
+            SelectAwbBeforeExport = "Select one or more entries from an AWB to export.",
+            EntryWavExported = path => $"WAV exported: {path}",
             PreviewFailed = "The entry could not be prepared for playback.",
             SelectAudioToPlay = "Select an entry or queued audio to play it.",
             AddReplacementRequired = "Add at least one replacement.",
@@ -2908,7 +3016,8 @@ public sealed partial class MainWindow : Window
             PickAwbTitle = "Select AWB",
             PickAudioTitle = "Select audio",
             PickOutputFolderTitle = "Select output folder",
-            PickExportFolderTitle = "Select export folder"
+            PickExportFolderTitle = "Select export folder",
+            PickEntryExportTitle = "Select folder for WAV files"
         };
 
         public string Subtitle { get; init; } = "";
@@ -2922,6 +3031,7 @@ public sealed partial class MainWindow : Window
         public string AddEntry { get; init; } = "";
         public string Rename { get; init; } = "";
         public string Delete { get; init; } = "";
+        public string ExportEntries { get; init; } = "";
         public string Remove { get; init; } = "";
         public string Clear { get; init; } = "";
         public string Loop { get; init; } = "";
@@ -2964,6 +3074,8 @@ public sealed partial class MainWindow : Window
         public string PluginCheckFailed { get; init; } = "";
         public string SelectAwbBeforeInspect { get; init; } = "";
         public string SelectAwbBeforePreview { get; init; } = "";
+        public string SelectAwbBeforeExport { get; init; } = "";
+        public Func<string, string> EntryWavExported { get; init; } = _ => "";
         public string PreviewFailed { get; init; } = "";
         public string SelectAudioToPlay { get; init; } = "";
         public string AddReplacementRequired { get; init; } = "";
@@ -3007,6 +3119,7 @@ public sealed partial class MainWindow : Window
         public string PickAudioTitle { get; init; } = "";
         public string PickOutputFolderTitle { get; init; } = "";
         public string PickExportFolderTitle { get; init; } = "";
+        public string PickEntryExportTitle { get; init; } = "";
 
         public string AudioMissing(string path) => $"{AudioMissingPrefix}: {path}";
         public string NewEntryQueued(string cue, int templateId) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("es", StringComparison.OrdinalIgnoreCase)
@@ -3051,9 +3164,11 @@ public sealed partial class MainWindow : Window
         public int LoopModeIndex { get; set; }
         public int LoopStart { get; set; }
         public int LoopEnd { get; set; }
-        public bool KeepHca { get; set; } = true;
+        public bool KeepHca { get; set; }
         public bool KeepReports { get; set; }
-        public bool UseModSuffix { get; set; } = true;
+        public bool UseModSuffix { get; set; }
+        public string LastSourceDirectory { get; set; } = "";
+        public string LastEntryExportDirectory { get; set; } = "";
         public List<double> AwbColumnWidths { get; set; } = [];
         public List<double> QueueColumnWidths { get; set; } = [];
     }

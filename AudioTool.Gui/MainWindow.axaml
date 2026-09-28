@@ -64,13 +64,13 @@
                 <TextBlock x:Name="ExportOptionsHeaderTextBlock" Text="Opciones de exportación" FontWeight="SemiBold" />
                 <CheckBox x:Name="KeepHcaCheckBox"
                           Content="Guardar audio codificado junto al AWB"
-                          IsChecked="True" />
+                          IsChecked="False" />
                 <CheckBox x:Name="KeepReportsCheckBox"
                           Content="Guardar informes de exportación"
                           IsChecked="False" />
                 <CheckBox x:Name="UseModSuffixCheckBox"
                           Content="Añadir sufijo .mod"
-                          IsChecked="True" />
+                          IsChecked="False" />
               </StackPanel>
             </Border>
           </StackPanel>
@@ -88,7 +88,7 @@
 
       <Border Grid.Column="2" Padding="14" CornerRadius="10" Background="#101C1C1C">
         <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="10">
-          <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
+          <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
             <TextBlock x:Name="EntriesHeaderTextBlock"
                        Text="Entradas AWB"
                        FontWeight="SemiBold"
@@ -105,6 +105,10 @@
                     Grid.Column="3"
                     Content="Nueva entrada"
                     Click="OnAddEntryClick" />
+            <Button x:Name="ExportEntriesButton"
+                    Grid.Column="4"
+                    Content="Exportar WAV"
+                    Click="OnExportEntriesClick" />
           </Grid>
 
           <Border Grid.Row="1" Padding="10" CornerRadius="6" Background="#14282929">
@@ -146,6 +150,7 @@
 
           <DataGrid Grid.Row="3"
                     x:Name="AwbEntriesGrid"
+                    SelectionMode="Extended"
                     RowHeight="34"
                     AutoGenerateColumns="False"
                     IsReadOnly="True"
@@ -155,6 +160,7 @@
                     SelectionChanged="OnAwbEntrySelectionChanged">
             <DataGrid.ContextMenu>
               <ContextMenu>
+                <MenuItem x:Name="ContextExportEntriesItem" Header="Exportar WAV" Click="OnExportEntriesClick" />
                 <MenuItem x:Name="ContextSubstituteItem" Header="Sustituir" Click="OnSubstituteClick" />
                 <MenuItem x:Name="ContextRenameItem" Header="Renombrar" Click="OnRenameEntryClick" />
                 <MenuItem x:Name="ContextDeleteItem" Header="Eliminar" Click="OnDeleteEntryClick" />
