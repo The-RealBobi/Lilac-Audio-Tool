@@ -79,6 +79,9 @@ public sealed partial class MainWindow : Window
         AttachColumnPreferenceHandlers();
         SetLoopEnabled(false);
         _uiReady = true;
+        ApplyLocalization();
+        UpdateLoopVisuals();
+        UpdateSelectedEntryDetails(AwbEntriesGrid.SelectedItem as AwbEntryViewModel);
         UpdateCommandPreview();
         AppendLog(UiText.Current.AudioRoot(_audioRoot));
         AppendLog(UiText.Current.DataRoot(_dataRoot));
@@ -111,6 +114,7 @@ public sealed partial class MainWindow : Window
         RemoveReplacementButton.Content = strings.Remove;
         ClearReplacementsButton.Content = strings.Clear;
         LoopHeaderTextBlock.Text = strings.Loop;
+        LoopSummaryTextBlock.Text = strings.AudioEmptySummary;
         UseWavLoopButton.Content = strings.UseSmpl;
         PreviewLoopButton.Content = strings.PreviewLoop;
         KeepHcaCheckBox.Content = strings.KeepHca;
@@ -150,6 +154,25 @@ public sealed partial class MainWindow : Window
         {
             noLoopItem.Content = strings.NoLoop;
         }
+    }
+
+    private void OnLanguageChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!_uiReady)
+        {
+            return;
+        }
+
+        CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo(LanguageComboBox.SelectedIndex == 1 ? "es" : "en");
+        ApplyLocalization();
+        UpdateLoopVisuals();
+        UpdateSelectedEntryDetails(AwbEntriesGrid.SelectedItem as AwbEntryViewModel);
+        foreach (var item in _replacementQueue)
+        {
+            item.RefreshLanguage();
+        }
+        UpdateCommandPreview();
+        SavePreferences();
     }
 
     private async void OnBrowseBankClick(object? sender, RoutedEventArgs e)
@@ -2440,6 +2463,9 @@ public sealed partial class MainWindow : Window
             _lastEntryExportDirectory = string.IsNullOrWhiteSpace(preferences.LastEntryExportDirectory)
                 ? preferences.OutputDirectory ?? ""
                 : preferences.LastEntryExportDirectory;
+            var language = preferences.Language == "es" ? "es" : "en";
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo(language);
+            LanguageComboBox.SelectedIndex = language == "es" ? 1 : 0;
             SelectorModeComboBox.SelectedIndex = Math.Clamp(preferences.SelectorModeIndex, 0, 1);
             EntryNumberBox.Value = Math.Clamp(preferences.EntryNumber, 0, 999999);
             LoopModeComboBox.SelectedIndex = Math.Clamp(preferences.LoopModeIndex, 0, 2);
@@ -2478,6 +2504,7 @@ public sealed partial class MainWindow : Window
                 OutputDirectory = OutputDirectoryTextBox.Text?.Trim() ?? "",
                 LastSourceDirectory = _lastSourceDirectory,
                 LastEntryExportDirectory = _lastEntryExportDirectory,
+                Language = LanguageComboBox.SelectedIndex == 1 ? "es" : "en",
                 SelectorModeIndex = Math.Clamp(SelectorModeComboBox.SelectedIndex, 0, 1),
                 EntryNumber = (int)(EntryNumberBox.Value ?? 0),
                 LoopModeIndex = Math.Clamp(LoopModeComboBox.SelectedIndex, 0, 2),
@@ -2799,6 +2826,8 @@ public sealed partial class MainWindow : Window
         public int LoopEnd { get; } = loopEnd;
         public string Mode => SelectorMode == "--id" ? "ID" : UiText.Current.Index;
         public string AudioName => Path.GetFileName(AudioPath) ?? AudioPath;
+
+        public void RefreshLanguage() => OnPropertyChanged(nameof(Mode));
 
         private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {
@@ -3159,6 +3188,7 @@ public sealed partial class MainWindow : Window
         public string AwbPath { get; set; } = "";
         public string AudioPath { get; set; } = "";
         public string OutputDirectory { get; set; } = "";
+        public string Language { get; set; } = "en";
         public int SelectorModeIndex { get; set; }
         public int EntryNumber { get; set; }
         public int LoopModeIndex { get; set; }

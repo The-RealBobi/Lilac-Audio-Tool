@@ -10,16 +10,26 @@
         Icon="/Assets/icon.ico"
         DragDrop.AllowDrop="True">
   <Grid Margin="18" RowDefinitions="Auto,*" RowSpacing="14">
-    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="16">
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
       <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
         <TextBlock Text="L5 Audio Tool" FontSize="28" FontWeight="Bold" />
         <TextBlock x:Name="VersionTextBlock" VerticalAlignment="Center" Opacity="0.68" />
         <TextBlock x:Name="SubtitleTextBlock" IsVisible="False" />
       </StackPanel>
 
+      <ComboBox x:Name="LanguageComboBox"
+                Grid.Column="1"
+                Width="115"
+                VerticalAlignment="Center"
+                SelectedIndex="0"
+                SelectionChanged="OnLanguageChanged">
+        <ComboBoxItem Content="English" />
+        <ComboBoxItem Content="Español" />
+      </ComboBox>
+
       <Button x:Name="ExecuteButton"
-              Grid.Column="1"
-              Content="4. Exportar ACB/AWB"
+              Grid.Column="2"
+              Content="4. Export ACB/AWB"
               Padding="22,10"
               MinWidth="190"
               VerticalAlignment="Center"
@@ -32,14 +42,14 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Spacing="16">
             <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
-              <TextBlock x:Name="FilesHeaderTextBlock" Text="1. Banco" FontWeight="SemiBold" />
+              <TextBlock x:Name="FilesHeaderTextBlock" Text="1. Bank" FontWeight="SemiBold" />
               <TextBlock Grid.Row="1"
                          x:Name="BankLabelTextBlock"
                          Text="ACB/AWB"
                          Opacity="0.78" />
               <Button Grid.Row="2"
                       x:Name="BrowseBankButton"
-                      Content="Examinar"
+                      Content="Browse"
                       HorizontalAlignment="Stretch"
                       HorizontalContentAlignment="Center"
                       Click="OnBrowseBankClick" />
@@ -47,12 +57,12 @@
 
             <Grid RowDefinitions="Auto,Auto" RowSpacing="8">
               <TextBox x:Name="AcbPathTextBox"
-                       Watermark="Banco .acb"
+                       Watermark=".acb bank"
                        IsReadOnly="True"
                        TextWrapping="NoWrap" />
               <TextBox Grid.Row="1"
                        x:Name="AwbPathTextBox"
-                       Watermark="Banco .awb"
+                       Watermark=".awb bank"
                        IsReadOnly="True"
                        TextWrapping="NoWrap" />
               <TextBox x:Name="WavPathTextBox" IsVisible="False" IsReadOnly="True" />
@@ -61,15 +71,15 @@
 
             <Border Padding="12" CornerRadius="8" Background="#16232424">
               <StackPanel Spacing="10">
-                <TextBlock x:Name="ExportOptionsHeaderTextBlock" Text="Opciones de exportación" FontWeight="SemiBold" />
+                <TextBlock x:Name="ExportOptionsHeaderTextBlock" Text="Export options" FontWeight="SemiBold" />
                 <CheckBox x:Name="KeepHcaCheckBox"
-                          Content="Guardar audio codificado junto al AWB"
+                          Content="Keep encoded audio next to the AWB"
                           IsChecked="False" />
                 <CheckBox x:Name="KeepReportsCheckBox"
-                          Content="Guardar informes de exportación"
+                          Content="Keep export reports"
                           IsChecked="False" />
                 <CheckBox x:Name="UseModSuffixCheckBox"
-                          Content="Añadir sufijo .mod"
+                          Content="Append .mod suffix"
                           IsChecked="False" />
               </StackPanel>
             </Border>
@@ -90,41 +100,41 @@
         <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="10">
           <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
             <TextBlock x:Name="EntriesHeaderTextBlock"
-                       Text="Entradas AWB"
+                       Text="AWB entries"
                        FontWeight="SemiBold"
                        VerticalAlignment="Center" />
             <Button x:Name="InspectAwbButton"
                     Grid.Column="1"
-                    Content="Leer entradas AWB"
+                    Content="Read AWB entries"
                     Click="OnInspectAwbClick" />
             <Button x:Name="PreviewEntryButton"
                     Grid.Column="2"
-                    Content="Reproducir"
+                    Content="Play"
                     Click="OnPreviewEntryClick" />
             <Button x:Name="AddEntryButton"
                     Grid.Column="3"
-                    Content="Nueva entrada"
+                    Content="New entry"
                     Click="OnAddEntryClick" />
             <Button x:Name="ExportEntriesButton"
                     Grid.Column="4"
-                    Content="Exportar WAV"
+                    Content="Export WAV"
                     Click="OnExportEntriesClick" />
           </Grid>
 
           <Border Grid.Row="1" Padding="10" CornerRadius="6" Background="#14282929">
             <TextBlock x:Name="SelectedEntryTextBlock"
-                       Text="Selecciona una entrada para ver sus nombres asociados."
+                       Text="Select an entry to see its associated names."
                        TextWrapping="Wrap" />
           </Border>
 
           <Grid Grid.Row="2" ColumnDefinitions="118,120,Auto,Auto,Auto,Auto" ColumnSpacing="8">
             <TextBlock x:Name="ChangesHeaderTextBlock"
-                       Text="2. Entrada"
+                       Text="2. Entry"
                        VerticalAlignment="Center"
                        FontWeight="SemiBold" />
             <ComboBox Grid.Column="1" x:Name="SelectorModeComboBox" SelectedIndex="0" SelectionChanged="OnSelectorChanged">
               <ComboBoxItem Content="ID AWB" />
-              <ComboBoxItem Content="Índice" />
+              <ComboBoxItem Content="Index" />
             </ComboBox>
             <NumericUpDown Grid.Column="2"
                            x:Name="EntryNumberBox"
@@ -136,15 +146,15 @@
                            ValueChanged="OnSelectorNumberChanged" />
             <Button Grid.Column="3"
                     x:Name="SubstituteButton"
-                    Content="Sustituir"
+                    Content="Replace"
                     Click="OnSubstituteClick" />
             <Button Grid.Column="4"
                     x:Name="RenameEntryButton"
-                    Content="Renombrar"
+                    Content="Rename"
                     Click="OnRenameEntryClick" />
             <Button Grid.Column="5"
                     x:Name="DeleteEntryButton"
-                    Content="Eliminar"
+                    Content="Delete"
                     Click="OnDeleteEntryClick" />
           </Grid>
 
@@ -160,18 +170,18 @@
                     SelectionChanged="OnAwbEntrySelectionChanged">
             <DataGrid.ContextMenu>
               <ContextMenu>
-                <MenuItem x:Name="ContextExportEntriesItem" Header="Exportar WAV" Click="OnExportEntriesClick" />
-                <MenuItem x:Name="ContextSubstituteItem" Header="Sustituir" Click="OnSubstituteClick" />
-                <MenuItem x:Name="ContextRenameItem" Header="Renombrar" Click="OnRenameEntryClick" />
-                <MenuItem x:Name="ContextDeleteItem" Header="Eliminar" Click="OnDeleteEntryClick" />
+                <MenuItem x:Name="ContextExportEntriesItem" Header="Export WAV" Click="OnExportEntriesClick" />
+                <MenuItem x:Name="ContextSubstituteItem" Header="Replace" Click="OnSubstituteClick" />
+                <MenuItem x:Name="ContextRenameItem" Header="Rename" Click="OnRenameEntryClick" />
+                <MenuItem x:Name="ContextDeleteItem" Header="Delete" Click="OnDeleteEntryClick" />
               </ContextMenu>
             </DataGrid.ContextMenu>
             <DataGrid.Columns>
               <DataGridTextColumn Header="Index" Binding="{Binding Index}" Width="74" MinWidth="56" />
               <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="74" MinWidth="56" />
-              <DataGridTextColumn Header="Tipo" Binding="{Binding Extension}" Width="78" MinWidth="62" />
-              <DataGridTextColumn Header="Tamaño" Binding="{Binding Size}" Width="102" MinWidth="78" />
-              <DataGridTemplateColumn Header="Nombre" Width="2*" MinWidth="180">
+              <DataGridTextColumn Header="Type" Binding="{Binding Extension}" Width="78" MinWidth="62" />
+              <DataGridTextColumn Header="Size" Binding="{Binding Size}" Width="102" MinWidth="78" />
+              <DataGridTemplateColumn Header="Name" Width="2*" MinWidth="180">
                 <DataGridTemplateColumn.CellTemplate>
                   <DataTemplate>
                     <Border ClipToBounds="True">
@@ -184,7 +194,7 @@
                   </DataTemplate>
                 </DataGridTemplateColumn.CellTemplate>
               </DataGridTemplateColumn>
-              <DataGridTextColumn Header="Usos" Binding="{Binding CueReferenceSummary}" Width="72" MinWidth="54" />
+              <DataGridTextColumn Header="Uses" Binding="{Binding CueReferenceSummary}" Width="72" MinWidth="54" />
             </DataGrid.Columns>
           </DataGrid>
         </Grid>
@@ -202,30 +212,30 @@
       <Grid Grid.Column="4" RowDefinitions="Auto,12,210,12,*">
         <Border Grid.Row="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
           <StackPanel Spacing="10">
-            <TextBlock x:Name="LoopHeaderTextBlock" Text="3. Loop" FontWeight="SemiBold" />
+            <TextBlock x:Name="LoopHeaderTextBlock" Text="3. Player and loop" FontWeight="SemiBold" />
             <Grid RowDefinitions="Auto,Auto" RowSpacing="8">
               <ComboBox x:Name="LoopModeComboBox"
                         HorizontalAlignment="Stretch"
                         SelectedIndex="0"
                         SelectionChanged="OnLoopModeChanged">
-                <ComboBoxItem Content="Loop del archivo" />
+                <ComboBoxItem Content="File loop" />
                 <ComboBoxItem Content="Manual" />
-                <ComboBoxItem Content="Sin loop" />
+                <ComboBoxItem Content="No loop" />
               </ComboBox>
               <Grid Grid.Row="1" ColumnDefinitions="*,*" ColumnSpacing="8">
                 <Button x:Name="UseWavLoopButton"
-                        Content="Usar loop original"
+                        Content="Use original loop"
                         HorizontalContentAlignment="Center"
                         Click="OnUseWavLoopClick" />
                 <Button x:Name="PreviewLoopButton"
                         Grid.Column="1"
-                        Content="Reproducir loop"
+                        Content="Play loop"
                         HorizontalContentAlignment="Center"
                         Click="OnPreviewLoopClick" />
               </Grid>
             </Grid>
             <TextBlock x:Name="LoopSummaryTextBlock"
-                       Text="Carga un WAV para ver duración y loop."
+                       Text="Load a WAV to see duration and loop."
                        Opacity="0.75"
                        TextWrapping="Wrap" />
             <Grid ColumnDefinitions="44,*" ColumnSpacing="10">
@@ -272,19 +282,19 @@
         <Border Grid.Row="2" Padding="14" CornerRadius="10" Background="#101C1C1C">
           <Grid RowDefinitions="Auto,Auto,*" RowSpacing="8">
             <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
-              <TextBlock x:Name="QueueHeaderTextBlock" Text="Cola" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <TextBlock x:Name="QueueHeaderTextBlock" Text="Queue" FontWeight="SemiBold" VerticalAlignment="Center" />
               <Button x:Name="RemoveReplacementButton"
                       Grid.Column="1"
-                      Content="Quitar"
+                      Content="Remove"
                       Click="OnRemoveReplacementClick" />
               <Button x:Name="ClearReplacementsButton"
                       Grid.Column="2"
-                      Content="Limpiar"
+                      Content="Clear"
                       Click="OnClearReplacementsClick" />
             </Grid>
             <TextBlock Grid.Row="1"
                        x:Name="CommandPreviewTextBlock"
-                       Text="Sin comando preparado."
+                       Text="No command prepared."
                        Opacity="0.75"
                        TextWrapping="Wrap" />
             <DataGrid Grid.Row="2"
@@ -298,8 +308,8 @@
                       CellEditEnded="OnReplacementCellEditEnded"
                       SelectionChanged="OnReplacementSelectionChanged">
               <DataGrid.Columns>
-                <DataGridTextColumn Header="Modo" Binding="{Binding Mode}" Width="72" MinWidth="58" IsReadOnly="True" />
-                <DataGridTextColumn Header="Entrada" Binding="{Binding Entry, Mode=TwoWay}" Width="92" MinWidth="72" />
+                <DataGridTextColumn Header="Mode" Binding="{Binding Mode}" Width="72" MinWidth="58" IsReadOnly="True" />
+                <DataGridTextColumn Header="Entry" Binding="{Binding Entry, Mode=TwoWay}" Width="92" MinWidth="72" />
                 <DataGridTemplateColumn Header="Audio" Width="*" MinWidth="170" IsReadOnly="True">
                   <DataGridTemplateColumn.CellTemplate>
                     <DataTemplate>
@@ -329,7 +339,7 @@
 
         <Border Grid.Row="4" Padding="14" CornerRadius="10" Background="#101C1C1C">
           <Grid RowDefinitions="Auto,*" RowSpacing="10">
-            <TextBlock x:Name="OperationHeaderTextBlock" Text="Registro" FontWeight="SemiBold" />
+            <TextBlock x:Name="OperationHeaderTextBlock" Text="Log" FontWeight="SemiBold" />
             <TextBox Grid.Row="1"
                      x:Name="LogTextBox"
                      IsReadOnly="True"
