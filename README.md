@@ -59,3 +59,6 @@ LilacAudioTool uses [ffmpeg](https://ffmpeg.org/ffmpeg.html), [vgmstream](https:
 
 ## Special thanks
 - **DaRk_Proaso** — testing, bug reports, and improvement suggestions.
+
+## License
+G4_Blender is licensed under the **GNU General Public License v3.0 or later**. See [LICENSE.MD](LICENSE.MD) for details.
