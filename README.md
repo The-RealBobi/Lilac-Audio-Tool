@@ -1,55 +1,61 @@
 # Lilac Audio Tool
 
-Desktop tool for replacing audio inside ACB/AWB banks.
+<p align="center">
+  <img alt=".NET 9" src="https://img.shields.io/badge/.NET-9-512BD4">
+  <img alt="Windows, macOS and Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue">
+</p>
 
-It lets you open a bank pair, preview entries, queue one or more replacements, adjust loops, and export a patched pair ready to package as a mod.
+**Lilac Audio Tool (LilacAT)** is a desktop application for working with ACB and AWB audio banks, built with **INAZUMA ELEVEN: Victory Road** and its newer v3 audio codec in mind.
 
-## Build
+It lets you browse and preview the audio stored in a bank, add, replace or remove entries, adjust loop points, and export the modified ACB/AWB files. You can also queue multiple replacements before exporting, making it easier to prepare audio mods.
 
-```bash
-dotnet build Lilac.AudioTool.slnx
+## How to use
+
+### 1. Open an audio bank
+
+Click **Browse** in the **1. Bank** section and select the ACB or AWB file you want to edit.
+
+In **INAZUMA ELEVEN: Victory Road**, these files are located in:
+
+```text
+/data/common/sound_asset/
 ```
 
-Requirements for a source checkout:
+Other Level-5 games may use different directories, such as:
 
-- .NET 9 SDK.
-- Python 3 available as `python3` on macOS/Linux or `python`/`py` on Windows.
-- Internet access on first use if FFmpeg or vgmstream are not already installed.
-
-Common first-run issues:
-
-- If Python is installed in a non-standard location, set `L5_AUDIO_PYTHON`.
-- If Homebrew/portable tools are not visible to GUI apps, set `L5_AUDIO_FFMPEG_PATH` and/or `L5_AUDIO_VGMSTREAM_PATH`.
-- The app checks PATH and its `PlugIns/` folders, including nested plugin folders.
-- On Windows, vgmstream must keep `vgmstream-cli.exe` together with its DLLs. If playback fails after an old install, delete `LilacAudioTool/PlugIns/Windows/` and launch the app again.
-
-## Run GUI
-
-```bash
-dotnet run --project AudioTool.Gui/AudioTool.Gui.csproj
+```text
+/data/nx/sound/
 ```
 
-## Distribution
+Once the bank has loaded, LilacAT displays the audio entries it contains.
 
-Publish a redistributable folder with:
+### 2. Find and preview an entry
 
-```bash
-python3 tools/package.py --runtime osx-arm64
-python3 tools/package.py --runtime win-x64
-python3 tools/package.py --runtime linux-x64
-```
+Select the entry you want to edit from the list. If you're not sure which one it is, click **Play** at the top of the window to listen to it first.
 
-The output is written to `dist/<runtime>/`.
+Previewing the audio is a good way to make sure you're replacing the right entry.
 
-Runtime notes:
+### 3. Replace the audio
 
-- Python 3 must be available as `python3` on macOS/Linux or `python` on Windows.
-- The app can download FFmpeg and vgmstream into the user data folder.
-- Preferences, caches, downloaded tools, and default work output are stored outside the install directory under the OS application-data folder, in `LilacAudioTool/`.
-- Set `L5_AUDIO_PYTHON` if Python is installed in a non-standard location.
-- Set `L5_AUDIO_DATA_ROOT` to force a portable data folder next to the app or inside a modding toolkit.
-- Set `L5_AUDIO_ROOT` only when running from an unusual folder layout.
+In the **2. Entry** section, click **Replace** and choose the audio file you want to use. **WAV is recommended** for replacements.
+
+You can repeat this for other entries and export your changes together.
+
+### 4. Adjust the loop (optional)
+
+If the replacement needs to loop, open the **3. Loop** section and select **Manual** from the loop mode dropdown.
+
+- Drag the markers on the grey timeline to set the approximate start and end of the loop.
+- Use the fields below the timeline to fine-tune the exact sample positions.
+
+If you don't need a custom loop, you can skip this step.
+
+### 5. Export your changes
+
+Click **Export ACB/AWB**, choose an output folder, and LilacAT will generate the modified ACB/AWB files.
+
+## Dependencies
+LilacAudioTool uses [ffmpeg](https://ffmpeg.org/ffmpeg.html), [vgmstream](https://github.com/vgmstream/vgmstream) and [Python 3](https://www.python.org/downloads/). If any of these tools aren't installed (except Python), the app will prompt you to install them.
 
 ## Special thanks
-
-- **DaRk_Proaso** for testing, bug reporting, and UI and UX improvement suggestions.
+- **DaRk_Proaso** — testing, bug reports, and improvement suggestions.
