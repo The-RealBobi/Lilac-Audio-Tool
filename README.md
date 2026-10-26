@@ -1,6 +1,6 @@
 # Lilac Audio Tool
 
-<p align="center">
+<p>
   <img alt=".NET 9" src="https://img.shields.io/badge/.NET-9-512BD4">
   <img alt="Windows, macOS and Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue">
 </p>
