@@ -55,10 +55,18 @@ If you don't need a custom loop, you can skip this step.
 Click **Export ACB/AWB**, choose an output folder, and LilacAT will generate the modified ACB/AWB files.
 
 ## Dependencies
-LilacAudioTool uses [ffmpeg](https://ffmpeg.org/ffmpeg.html), [vgmstream](https://github.com/vgmstream/vgmstream) and [Python 3](https://www.python.org/downloads/). If any of these tools aren't installed (except Python), the app will prompt you to install them.
+LilacAudioTool uses [FFmpeg](https://ffmpeg.org/ffmpeg.html) and [vgmstream](https://github.com/vgmstream/vgmstream) for audio conversion and playback. The app checks for these tools when it starts. Python is no longer required.
+
+To build a self-contained distribution with the .NET SDK:
+
+```sh
+dotnet msbuild tools/Package.proj -p:RuntimeIdentifier=osx-arm64
+```
+
+Use `win-x64` for Windows. The output is in `dist/<runtime>`.
 
 ## Special thanks
 - **DaRk_Proaso** — testing, bug reports, and improvement suggestions.
 
 ## License
-G4_Blender is licensed under the **GNU General Public License v3.0 or later**. See [LICENSE.MD](LICENSE.MD) for details.
+LilacAudioTool is licensed under the **GNU General Public License v3.0 or later**. See [LICENSE.md](LICENSE.md) for details.

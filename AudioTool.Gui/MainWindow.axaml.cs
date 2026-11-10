@@ -1,3 +1,4 @@
+using Level5.AudioTool.Core.Cri;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -5,6 +6,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Net.Http;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -25,6 +27,7 @@ namespace Level5.AudioTool.Gui;
 
 public sealed partial class MainWindow : Window
 {
+    private static string ExportProvenance => $"LAT_v{typeof(MainWindow).Assembly.GetName().Version!.ToString(3)}";
     private static string AppVersion => $"v{typeof(MainWindow).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0"}";
     private readonly ObservableCollection<AwbEntryViewModel> _awbEntries = new();
     private readonly ObservableCollection<ReplacementQueueItem> _replacementQueue = new();
@@ -200,7 +203,7 @@ public sealed partial class MainWindow : Window
 
     private async Task EnsurePluginsAsync()
     {
-        var result = await RunPythonAsync(["ensure-plugins"]);
+        var result = await RunAudioCommandAsync(["ensure-plugins"]);
         if (result.ExitCode != 0)
         {
             AppendLog($"{UiText.Current.PluginCheckFailed}{Environment.NewLine}{result.CombinedOutput}");
@@ -331,7 +334,7 @@ public sealed partial class MainWindow : Window
                     args.Add(AcbPathTextBox.Text!);
                 }
 
-                var result = await RunPythonAsync(args);
+                var result = await RunAudioCommandAsync(args);
                 AppendLog(result.CombinedOutput);
                 if (result.ExitCode != 0)
                 {
@@ -403,7 +406,7 @@ public sealed partial class MainWindow : Window
                 inspectArgs.Add(AcbPathTextBox.Text!);
             }
 
-            var result = await RunPythonAsync(inspectArgs);
+            var result = await RunAudioCommandAsync(inspectArgs);
             if (result.ExitCode != 0)
             {
                 AppendLog(result.CombinedOutput);
@@ -499,7 +502,7 @@ public sealed partial class MainWindow : Window
                 previewArgs.Add(AcbPathTextBox.Text!);
             }
 
-            var result = await RunPythonAsync(previewArgs);
+            var result = await RunAudioCommandAsync(previewArgs);
             if (result.ExitCode != 0)
             {
                 AppendLog(result.CombinedOutput);
@@ -709,7 +712,7 @@ public sealed partial class MainWindow : Window
                 }
 
                 AppendLog(UiText.Current.BuildingAwb(i + 1, jobs.Count, job.Label));
-                var replaceResult = await RunPythonAsync(replaceArgs);
+                var replaceResult = await RunAudioCommandAsync(replaceArgs);
                 AppendLog(replaceResult.CombinedOutput);
                 if (replaceResult.ExitCode != 0)
                 {
@@ -763,7 +766,7 @@ public sealed partial class MainWindow : Window
                     patchArgs.Add("--no-loop");
                 }
                 AppendLog(UiText.Current.PatchingBank(i + 1, jobs.Count));
-                var patchResult = await RunPythonAsync(patchArgs);
+                var patchResult = await RunAudioCommandAsync(patchArgs);
                 AppendLog(patchResult.CombinedOutput);
                 if (patchResult.ExitCode != 0)
                 {
@@ -777,6 +780,7 @@ public sealed partial class MainWindow : Window
             var streamPatchArgs = new List<string>
             {
                 "patch-acb-stream-awb",
+                "--provenance", ExportProvenance,
                 targetAcb,
                 targetAcb,
                 "--awb",
@@ -786,7 +790,7 @@ public sealed partial class MainWindow : Window
             };
 
             AppendLog(UiText.Current.UpdatingBankInfo);
-            var streamPatchResult = await RunPythonAsync(streamPatchArgs);
+            var streamPatchResult = await RunAudioCommandAsync(streamPatchArgs);
             AppendLog(streamPatchResult.CombinedOutput);
             if (streamPatchResult.ExitCode == 0)
             {
@@ -823,7 +827,7 @@ public sealed partial class MainWindow : Window
             try
             {
                 var encodedAwb = Path.Combine(stage, "encoded.awb");
-                var encodeResult = await RunPythonAsync([
+                var encodeResult = await RunAudioCommandAsync([
                     "replace-awb-wav", awbPath, encodedAwb, request.AudioPath,
                     "--id", request.TemplateAwbId.ToString(), "--no-loop", "--keep-hca"]);
                 AppendLog(encodeResult.CombinedOutput);
@@ -834,7 +838,7 @@ public sealed partial class MainWindow : Window
 
                 var replacementHca = encodedAwb + ".replacement.hca";
                 var report = LoadReplaceReport(encodedAwb);
-                var addResult = await RunPythonAsync([
+                var addResult = await RunAudioCommandAsync([
                     "add-acb-awb-hca",
                     "--acb", acbPath,
                     "--awb", awbPath,
@@ -855,8 +859,8 @@ public sealed partial class MainWindow : Window
                     return;
                 }
 
-                var streamResult = await RunPythonAsync([
-                    "patch-acb-stream-awb", targetAcb, targetAcb, "--awb", targetAwb,
+                var streamResult = await RunAudioCommandAsync([
+                    "patch-acb-stream-awb", "--provenance", ExportProvenance, targetAcb, targetAcb, "--awb", targetAwb,
                     "--name", Path.GetFileNameWithoutExtension(awbPath)]);
                 AppendLog(streamResult.CombinedOutput);
                 if (streamResult.ExitCode == 0)
@@ -891,11 +895,11 @@ public sealed partial class MainWindow : Window
             try
             {
                 var encodedAwb = Path.Combine(stage, "encoded.awb");
-                var encodeResult = await RunPythonAsync(["replace-awb-wav", awbPath, encodedAwb, request.AudioPath, "--id", request.TemplateAwbId.ToString(), "--no-loop", "--keep-hca"]);
+                var encodeResult = await RunAudioCommandAsync(["replace-awb-wav", awbPath, encodedAwb, request.AudioPath, "--id", request.TemplateAwbId.ToString(), "--no-loop", "--keep-hca"]);
                 AppendLog(encodeResult.CombinedOutput);
                 if (encodeResult.ExitCode != 0) return;
                 var report = LoadReplaceReport(encodedAwb);
-                var result = await RunPythonAsync([
+                var result = await RunAudioCommandAsync([
                     "redirect-acb-cue-awb-hca", "--acb", acbPath, "--awb", awbPath,
                     "--hca", encodedAwb + ".replacement.hca", "--output-acb", targetAcb, "--output-awb", targetAwb,
                     "--cue-name", request.CueName, "--awb-id", FindNextAwbId().ToString(),
@@ -906,7 +910,7 @@ public sealed partial class MainWindow : Window
                 ]);
                 AppendLog(result.CombinedOutput);
                 if (result.ExitCode != 0) return;
-                var stream = await RunPythonAsync(["patch-acb-stream-awb", targetAcb, targetAcb, "--awb", targetAwb, "--name", Path.GetFileNameWithoutExtension(awbPath)]);
+                var stream = await RunAudioCommandAsync(["patch-acb-stream-awb", "--provenance", ExportProvenance, targetAcb, targetAcb, "--awb", targetAwb, "--name", Path.GetFileNameWithoutExtension(awbPath)]);
                 AppendLog(stream.CombinedOutput);
                 if (stream.ExitCode == 0)
                 {
@@ -937,12 +941,12 @@ public sealed partial class MainWindow : Window
         {
             var command = new List<string> { action.Kind == "rename" ? "rename-acb-cue" : "delete-acb-cue", "--acb", acbPath, "--output", targetAcb, "--cue-name", action.OldName };
             if (action.Kind == "rename") command.AddRange(["--new-name", action.NewName!]);
-            var result = await RunPythonAsync(command);
+            var result = await RunAudioCommandAsync(command);
             AppendLog(result.CombinedOutput);
             if (result.ExitCode != 0) return;
 
             File.Copy(awbPath, targetAwb, overwrite: true);
-            var streamResult = await RunPythonAsync(["patch-acb-stream-awb", targetAcb, targetAcb, "--awb", targetAwb, "--name", Path.GetFileNameWithoutExtension(awbPath)]);
+            var streamResult = await RunAudioCommandAsync(["patch-acb-stream-awb", "--provenance", ExportProvenance, targetAcb, targetAcb, "--awb", targetAwb, "--name", Path.GetFileNameWithoutExtension(awbPath)]);
             AppendLog(streamResult.CombinedOutput);
             if (streamResult.ExitCode == 0)
             {
@@ -1401,7 +1405,7 @@ public sealed partial class MainWindow : Window
 
     private async Task LoadWavInfoAsync(string path)
     {
-        var result = await RunPythonAsync(["wav-info", path]);
+        var result = await RunAudioCommandAsync(["wav-info", path]);
         if (result.ExitCode != 0)
         {
             StopPlayback();
@@ -1928,7 +1932,7 @@ public sealed partial class MainWindow : Window
             }
 
             clipPath = Path.Combine(clipDirectory, "preview_loop.wav");
-            var loopResult = await RunPythonAsync([
+            var loopResult = await RunAudioCommandAsync([
                 "loop-audio",
                 _playerSourcePath,
                 "--output",
@@ -1953,7 +1957,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var result = await RunPythonAsync([
+        var result = await RunAudioCommandAsync([
             "clip-audio",
             _playerSourcePath,
             "--output",
@@ -2587,44 +2591,20 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task<ProcessResult> RunPythonAsync(IReadOnlyList<string> arguments)
-    {
-        var scriptPath = Path.Combine(_audioRoot, "tools", "cri_audio_tool.py");
-        var python = ResolvePython();
-        if (python is null)
+    private Task<ProcessResult> RunAudioCommandAsync(IReadOnlyList<string> arguments) =>
+        Task.Run(() =>
         {
-            return new ProcessResult(127, "", UiText.Current.PythonMissing);
-        }
-
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = python,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-            WorkingDirectory = _audioRoot
-        };
-        startInfo.Environment["L5_AUDIO_ROOT"] = _audioRoot;
-        startInfo.Environment["L5_AUDIO_DATA_ROOT"] = _dataRoot;
-        startInfo.ArgumentList.Add(scriptPath);
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = Process.Start(startInfo);
-        if (process is null)
-        {
-            return new ProcessResult(127, "", UiText.Current.PythonStartFailed);
-        }
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
-        return new ProcessResult(process.ExitCode, stdout, stderr);
-    }
+            try
+            {
+                return new ProcessResult(0, CriCommands.Run(arguments, _audioRoot, _dataRoot), "");
+            }
+            catch (Exception exception) when (exception is IOException or ArgumentException or InvalidOperationException
+                or FormatException or OverflowException or System.ComponentModel.Win32Exception or HttpRequestException
+                or JsonException or UnauthorizedAccessException or NotSupportedException)
+            {
+                return new ProcessResult(1, "", exception.Message);
+            }
+        });
 
     private static JsonSerializerOptions JsonOptions()
     {
@@ -2640,48 +2620,7 @@ public sealed partial class MainWindow : Window
         };
     }
 
-    private static string? ResolvePython()
-    {
-        var explicitPython = Environment.GetEnvironmentVariable("L5_AUDIO_PYTHON");
-        if (ToolStarts(explicitPython, "--version"))
-        {
-            return explicitPython;
-        }
-
-        var candidates = OperatingSystem.IsWindows()
-            ? new[] { "py", "python" }
-            : ["python3", "python"];
-        return candidates.FirstOrDefault(candidate => ToolStarts(candidate, "--version"));
-    }
-
-    private static bool ToolStarts(string? fileName, string argument)
-    {
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            return false;
-        }
-
-        try
-        {
-            using var process = Process.Start(new ProcessStartInfo
-            {
-                FileName = fileName,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-                ArgumentList = { argument }
-            });
-            process?.WaitForExit(3000);
-            return process is not null && process.HasExited && process.ExitCode == 0;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static string ResolveAudioRoot()
+    internal static string ResolveAudioRoot()
     {
         var explicitRoot = Environment.GetEnvironmentVariable("L5_AUDIO_ROOT");
         if (IsAudioRoot(explicitRoot))
@@ -2711,10 +2650,12 @@ public sealed partial class MainWindow : Window
 
     private static bool IsAudioRoot(string? path)
     {
-        return !string.IsNullOrWhiteSpace(path) && File.Exists(Path.Combine(path, "tools", "cri_audio_tool.py"));
+        return !string.IsNullOrWhiteSpace(path) &&
+            (File.Exists(Path.Combine(path, "Lilac.AudioTool.slnx")) ||
+             Directory.Exists(Path.Combine(path, "tools", "CriHcaToolRuntime")));
     }
 
-    private static string ResolveDataRoot()
+    internal static string ResolveDataRoot()
     {
         var explicitRoot = Environment.GetEnvironmentVariable("L5_AUDIO_DATA_ROOT");
         if (!string.IsNullOrWhiteSpace(explicitRoot))
@@ -2934,8 +2875,6 @@ public sealed partial class MainWindow : Window
             NoLoopLower = "sin loop",
             PlayerStartFailed = "No se pudo iniciar el reproductor integrado.",
             PlayerCannotPlay = "El reproductor integrado no pudo reproducir ese archivo.",
-            PythonMissing = "No se encontró Python 3. Instala Python o define L5_AUDIO_PYTHON con la ruta del ejecutable.",
-            PythonStartFailed = "No se pudo iniciar Python.",
             PickBankTitle = "Seleccionar ACB/AWB",
             PickAcbTitle = "Seleccionar ACB",
             PickAwbTitle = "Seleccionar AWB",
@@ -3038,8 +2977,6 @@ public sealed partial class MainWindow : Window
             NoLoopLower = "no loop",
             PlayerStartFailed = "The built-in player could not be started.",
             PlayerCannotPlay = "The built-in player could not play that file.",
-            PythonMissing = "Python 3 was not found. Install Python or set L5_AUDIO_PYTHON to its executable path.",
-            PythonStartFailed = "Python could not be started.",
             PickBankTitle = "Select ACB/AWB",
             PickAcbTitle = "Select ACB",
             PickAwbTitle = "Select AWB",
@@ -3140,8 +3077,6 @@ public sealed partial class MainWindow : Window
         public string NoLoopLower { get; init; } = "";
         public string PlayerStartFailed { get; init; } = "";
         public string PlayerCannotPlay { get; init; } = "";
-        public string PythonMissing { get; init; } = "";
-        public string PythonStartFailed { get; init; } = "";
         public string PickBankTitle { get; init; } = "";
         public string PickAcbTitle { get; init; } = "";
         public string PickAwbTitle { get; init; } = "";

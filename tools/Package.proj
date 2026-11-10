@@ -1,0 +1,17 @@
+<Project DefaultTargets="Package">
+  <PropertyGroup>
+    <Root>$(MSBuildThisFileDirectory)..</Root>
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+    <PackageDir>$([System.IO.Path]::GetFullPath('$(Root)/dist/$(RuntimeIdentifier)'))</PackageDir>
+  </PropertyGroup>
+  <Target Name="Package">
+    <Error Condition="'$(RuntimeIdentifier)' == ''" Text="Specify -p:RuntimeIdentifier, for example osx-arm64 or win-x64." />
+    <MSBuild Projects="$(Root)/AudioTool.Gui/AudioTool.Gui.csproj"
+             Targets="Restore;Publish"
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=true;PublishDir=$(PackageDir)/;DebugSymbols=false;DebugType=None" />
+    <MSBuild Projects="$(Root)/tools/CriHcaTool/CriHcaTool.csproj"
+             Targets="Restore;Publish"
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=true;PublishDir=$(PackageDir)/tools/CriHcaToolRuntime/;DebugSymbols=false;DebugType=None" />
+    <Copy SourceFiles="$(Root)/README.md;$(Root)/LICENSE.md;$(Root)/CHANGELOG.md" DestinationFolder="$(PackageDir)" />
+  </Target>
+</Project>
