@@ -55,15 +55,8 @@ If you don't need a custom loop, you can skip this step.
 Click **Export ACB/AWB**, choose an output folder, and LilacAT will generate the modified ACB/AWB files.
 
 ## Dependencies
-LilacAudioTool uses [FFmpeg](https://ffmpeg.org/ffmpeg.html) and [vgmstream](https://github.com/vgmstream/vgmstream) for audio conversion and playback. The app checks for these tools when it starts. Python is no longer required.
+LilacAudioTool uses [FFmpeg](https://ffmpeg.org/ffmpeg.html) and [vgmstream](https://github.com/vgmstream/vgmstream) for audio conversion and playback. The app checks for these tools when it starts.
 
-To build a self-contained distribution with the .NET SDK:
-
-```sh
-dotnet msbuild tools/Package.proj -p:RuntimeIdentifier=osx-arm64
-```
-
-Use `win-x64` for Windows. The output is in `dist/<runtime>`.
 
 ## Special thanks
 - **DaRk_Proaso** — testing, bug reports, and improvement suggestions.
