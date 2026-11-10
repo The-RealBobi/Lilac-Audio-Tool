@@ -2,8 +2,8 @@
 
 ## v1.1.0
 
-- Removed the Python installation requirement. Bank inspection, cue lookup, WAV extraction, previews and export now run from the C# app.
-- Ported the full ACB/AWB editing workflow, including queued replacements, adding entries, renaming and deleting cues, redirecting cues to new audio, and updating the paired bank metadata.
-- Ported audio analysis, clipping and loop previews. FFmpeg, vgmstream and the bundled HCA/ADX helper continue to handle audio conversion and decoding.
-- Validate a decoded preview before putting it in the preview cache. Failed decodes can be retried without reusing a partial WAV.
-- Build self-contained packages for Windows x64 and macOS ARM64 with the .NET SDK, including the HCA/ADX helper and GPL license.
+- Removed the Python requirement for inspecting banks, looking up cues, extracting WAV files, previewing audio and exporting changes.
+- Moved ACB/AWB editing to C#, including queued replacements, adding entries, renaming or deleting cues and redirecting cues to new audio.
+- Moved audio analysis, clipping and loop previews to C# and kept the existing FFmpeg, vgmstream and HCA/ADX codec tools.
+- Fixed failed preview decodes leaving incomplete WAV files in the cache.
+- Packaged the HCA/ADX helper and GPL license with the self-contained Windows x64 and macOS ARM64 builds.
