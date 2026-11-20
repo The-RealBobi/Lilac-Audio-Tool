@@ -47,5 +47,51 @@ public sealed class CriAcbCommandsTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RenameUnnamedCueUsesSelectedAwbEntry(bool hasNameRow)
+    {
+        string directory = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            string source = Path.Combine(directory, "source.acb");
+            string target = Path.Combine(directory, "target.acb");
+            var cues = new UtfTable("CueTable",
+                [[Field("ReferenceType", 0x50, 1), Field("ReferenceIndex", 0x52, 0)],
+                 [Field("ReferenceType", 0x50, 1), Field("ReferenceIndex", 0x52, 1)],
+                 [Field("ReferenceType", 0x50, 1), Field("ReferenceIndex", 0x52, 2)]]);
+            var waveforms = new UtfTable("WaveformTable",
+                [[Field("StreamAwbId", 0x52, 7)], [Field("StreamAwbId", 0x52, 11)], [Field("StreamAwbId", 0x52, 17)]]);
+            var names = new UtfTable("CueNameTable",
+                [[Field("CueIndex", 0x52, 0), Field("CueName", 0x5a, "Existing")],
+                 [Field("CueIndex", 0x52, 2), Field("CueName", 0x5a, "")]]);
+            if (hasNameRow)
+                names.Rows.Add([Field("CueIndex", 0x52, 1), Field("CueName", 0x5a, "")]);
+            var root = new UtfTable("Acb",
+                [[Field("CueTable", 0x5b, cues.Write()), Field("WaveformTable", 0x5b, waveforms.Write()),
+                  Field("CueNameTable", 0x5b, names.Write())]]);
+            byte[] original = root.Write();
+            File.WriteAllBytes(source, original);
+
+            CriCommands.Run(["rename-acb-cue", "--acb", source, "--output", target,
+                "--awb-id", "11", "--cue-name", "", "--new-name", "c01000100_whs00050"], directory, directory);
+
+            var renamed = UtfTable.Read(File.ReadAllBytes(target));
+            var rows = renamed.NestedTables()["CueNameTable"].Rows;
+            Assert.Equal(3, rows.Count);
+            Assert.Equal("Existing", UtfField.Find(rows.Single(row => UtfField.Integer(row, "CueIndex") == 0), "CueName")?.Value);
+            Assert.Equal("c01000100_whs00050", UtfField.Find(rows.Single(row => UtfField.Integer(row, "CueIndex") == 1), "CueName")?.Value);
+            Assert.Equal("", UtfField.Find(rows.Single(row => UtfField.Integer(row, "CueIndex") == 2), "CueName")?.Value);
+            Assert.Equal(original, File.ReadAllBytes(source));
+            Assert.Equal(cues.Write(), Assert.IsType<byte[]>(UtfField.Find(renamed.Rows[0], "CueTable")?.Value));
+            Assert.Equal(waveforms.Write(), Assert.IsType<byte[]>(UtfField.Find(renamed.Rows[0], "WaveformTable")?.Value));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static UtfField Field(string name, byte type, object value) => new(name, type, value, -1, 0);
 }

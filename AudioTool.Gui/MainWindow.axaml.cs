@@ -940,7 +940,8 @@ public sealed partial class MainWindow : Window
         await RunBusyAsync(async () =>
         {
             var command = new List<string> { action.Kind == "rename" ? "rename-acb-cue" : "delete-acb-cue", "--acb", acbPath, "--output", targetAcb, "--cue-name", action.OldName };
-            if (action.Kind == "rename") command.AddRange(["--new-name", action.NewName!]);
+            if (action.Kind == "rename")
+                command.AddRange(["--awb-id", action.AwbId.ToString(CultureInfo.InvariantCulture), "--new-name", action.NewName!]);
             var result = await RunAudioCommandAsync(command);
             AppendLog(result.CombinedOutput);
             if (result.ExitCode != 0) return;

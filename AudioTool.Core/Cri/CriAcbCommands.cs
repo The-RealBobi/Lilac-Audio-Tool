@@ -230,12 +230,10 @@ internal static partial class CriAcbCommands
         var root = UtfTable.Read(CriFiles.Read(source));
         var tables = root.NestedTables();
         var nameTable = RequireTable(tables, "CueNameTable");
-        var rows = nameTable.Rows.Where(row => Equals(Field(row, "CueName")?.Value, name)).ToArray();
-        if (rows.Length != 1)
-            throw new InvalidDataException($"Expected one cue named '{name}', found {rows.Length}.");
-        var selected = rows[0];
+        var selected = !delete && args.Has("awb-id")
+            ? ResolveRenameRow(tables, nameTable, AwbId(args, "awb-id"), name)
+            : RequireUniqueCueNameRow(nameTable, name);
 
-        object report;
         if (delete)
         {
             var cueTable = RequireTable(tables, "CueTable");
@@ -246,18 +244,53 @@ internal static partial class CriAcbCommands
             foreach (var row in nameTable.Rows)
                 if (Number(row, "CueIndex") is long other && other > index)
                     UtfField.Set(row, "CueIndex", other - 1);
-            report = new { acb = target, deleted_name = name, cue_index = index, awb_payload_preserved = true };
+            CriFiles.Write(target, SerializeNested(root, tables));
+            return new { acb = target, deleted_name = name, cue_index = index, awb_payload_preserved = true };
         }
-        else
+        string newName = args.Require("new-name");
+        if (nameTable.Rows.Any(row => Equals(Field(row, "CueName")?.Value, newName)))
+            throw new InvalidDataException($"Cue name already exists: {newName}");
+        UtfField.Set(selected, "CueName", newName);
+        CriFiles.Write(target, root.ReplaceNested(new Dictionary<string, byte[]> { ["CueNameTable"] = nameTable.Write() }));
+        return new { acb = target, old_name = name, new_name = newName };
+    }
+
+    private static List<UtfField> RequireUniqueCueNameRow(UtfTable names, string name)
+    {
+        var matches = names.Rows.Where(row => Equals(Field(row, "CueName")?.Value, name)).ToArray();
+        return matches.Length == 1 ? matches[0]
+            : throw new InvalidDataException($"Expected one cue named '{name}', found {matches.Length}.");
+    }
+
+    private static List<UtfField> ResolveRenameRow(Dictionary<string, UtfTable> tables, UtfTable names, uint awbId, string name)
+    {
+        var cues = RequireTable(tables, "CueTable");
+        var waveforms = RequireTable(tables, "WaveformTable");
+        var indices = Enumerable.Range(0, cues.Rows.Count)
+            .Where(index => ResolveCueWaveforms(cues.Rows[index], tables)
+                .Any(wave => WaveformAwbId(waveforms.Rows[wave]) == awbId))
+            .ToHashSet();
+        var rows = names.Rows.Where(row => Index(row, "CueIndex") is int index && indices.Contains(index)).ToArray();
+        if (!string.IsNullOrWhiteSpace(name))
         {
-            string newName = args.Require("new-name");
-            if (nameTable.Rows.Any(row => Equals(Field(row, "CueName")?.Value, newName)))
-                throw new InvalidDataException($"Cue name already exists: {newName}");
-            UtfField.Set(selected, "CueName", newName);
-            report = new { acb = target, old_name = name, new_name = newName };
+            var named = rows.Where(row => Equals(Field(row, "CueName")?.Value, name)).ToArray();
+            if (named.Length == 1)
+                return named[0];
         }
-        CriFiles.Write(target, SerializeNested(root, tables));
-        return report;
+
+        if (indices.Count != 1 || rows.Length > 1 ||
+            rows.Any(row => Field(row, "CueName")?.Value is string value && !string.IsNullOrWhiteSpace(value)))
+            throw new InvalidDataException($"Cannot identify one cue to rename for AWB entry {awbId}.");
+
+        if (rows.Length == 1)
+            return rows[0];
+
+        var newRow = names.Rows.Count == 0
+            ? [new UtfField("CueIndex", 0x52, 0L, -1, 0), new UtfField("CueName", 0x5a, "", -1, 0)]
+            : UtfField.CloneRow(names.Rows[0]);
+        UtfField.Set(newRow, "CueIndex", (long)indices.Single());
+        names.Rows.Add(newRow);
+        return newRow;
     }
 
     private static byte[] SerializeNested(UtfTable root, Dictionary<string, UtfTable> tables) =>

@@ -27,19 +27,23 @@ internal static partial class CriAcbCommands
                     .FirstOrDefault(value => !string.IsNullOrEmpty(value)) ?? $"Cue {cueIndex}";
             foreach (int waveformIndex in ResolveCueWaveforms(row, tables))
             {
-                var wave = waveform.Rows[waveformIndex];
-                long? id = Number(wave, "StreamAwbId");
-                if (id is null or < 0)
-                    id = Number(wave, "MemoryAwbId");
-                if (id is null or < 0 or > uint.MaxValue)
+                if (WaveformAwbId(waveform.Rows[waveformIndex]) is not uint id)
                     continue;
-                if (!result.TryGetValue((uint)id, out var existing))
-                    result.Add((uint)id, existing = []);
+                if (!result.TryGetValue(id, out var existing))
+                    result.Add(id, existing = []);
                 if (!existing.Contains(name))
                     existing.Add(name);
             }
         }
         return result;
+    }
+
+    private static uint? WaveformAwbId(List<UtfField> wave)
+    {
+        long? id = Number(wave, "StreamAwbId");
+        if (id is null or < 0)
+            id = Number(wave, "MemoryAwbId");
+        return id is >= 0 and <= uint.MaxValue ? (uint)id.Value : null;
     }
 
     internal static Dictionary<string, object?>? EntryInfo(byte[] acb, uint id)
