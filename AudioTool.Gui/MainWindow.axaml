@@ -6,17 +6,12 @@
         Height="820"
         MinWidth="1100"
         MinHeight="720"
-        Title="L5 Audio Tool"
+        Title="Lilac Audio Tool"
         Icon="/Assets/icon.ico"
         DragDrop.AllowDrop="True">
-  <Grid Margin="18" RowDefinitions="Auto,*" RowSpacing="14">
-    <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
-      <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-        <TextBlock Text="L5 Audio Tool" FontSize="28" FontWeight="Bold" />
-        <TextBlock x:Name="VersionTextBlock" VerticalAlignment="Center" Opacity="0.68" />
-        <TextBlock x:Name="SubtitleTextBlock" IsVisible="False" />
-      </StackPanel>
-
+  <Grid Margin="18" RowDefinitions="Auto,*,Auto" RowSpacing="14">
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="10">
+      <TextBlock Text="Lilac Audio Tool" FontSize="28" FontWeight="Bold" VerticalAlignment="Center" />
       <ComboBox x:Name="LanguageComboBox"
                 Grid.Column="1"
                 Width="115"
@@ -26,65 +21,27 @@
         <ComboBoxItem Content="English" />
         <ComboBoxItem Content="Español" />
       </ComboBox>
-
-      <Button x:Name="ExecuteButton"
-              Grid.Column="2"
-              Content="4. Export ACB/AWB"
-              Padding="22,10"
-              MinWidth="190"
-              VerticalAlignment="Center"
-              HorizontalContentAlignment="Center"
-              Click="OnExecuteClick" />
     </Grid>
 
-    <Grid Grid.Row="1" ColumnDefinitions="300,12,*,12,360">
+    <Grid Grid.Row="1">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="300" MinWidth="245" />
+        <ColumnDefinition Width="12" />
+        <ColumnDefinition Width="*" MinWidth="200" />
+        <ColumnDefinition Width="12" />
+        <ColumnDefinition Width="360" MinWidth="285" />
+      </Grid.ColumnDefinitions>
       <Border Grid.Column="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
-        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-          <StackPanel Spacing="16">
-            <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
-              <TextBlock x:Name="FilesHeaderTextBlock" Text="1. Bank" FontWeight="SemiBold" />
-              <TextBlock Grid.Row="1"
-                         x:Name="BankLabelTextBlock"
-                         Text="ACB/AWB"
-                         Opacity="0.78" />
-              <Button Grid.Row="2"
-                      x:Name="BrowseBankButton"
-                      Content="Browse"
-                      HorizontalAlignment="Stretch"
-                      HorizontalContentAlignment="Center"
-                      Click="OnBrowseBankClick" />
-            </Grid>
-
-            <Grid RowDefinitions="Auto,Auto" RowSpacing="8">
-              <TextBox x:Name="AcbPathTextBox"
-                       Watermark=".acb bank"
-                       IsReadOnly="True"
-                       TextWrapping="NoWrap" />
-              <TextBox Grid.Row="1"
-                       x:Name="AwbPathTextBox"
-                       Watermark=".awb bank"
-                       IsReadOnly="True"
-                       TextWrapping="NoWrap" />
-              <TextBox x:Name="WavPathTextBox" IsVisible="False" IsReadOnly="True" />
-              <TextBox x:Name="OutputDirectoryTextBox" IsVisible="False" IsReadOnly="True" />
-            </Grid>
-
-            <Border Padding="12" CornerRadius="8" Background="#16232424">
-              <StackPanel Spacing="10">
-                <TextBlock x:Name="ExportOptionsHeaderTextBlock" Text="Export options" FontWeight="SemiBold" />
-                <CheckBox x:Name="KeepHcaCheckBox"
-                          Content="Keep encoded audio next to the AWB"
-                          IsChecked="False" />
-                <CheckBox x:Name="KeepReportsCheckBox"
-                          Content="Keep export reports"
-                          IsChecked="False" />
-                <CheckBox x:Name="UseModSuffixCheckBox"
-                          Content="Append .mod suffix"
-                          IsChecked="False" />
-              </StackPanel>
-            </Border>
-          </StackPanel>
-        </ScrollViewer>
+        <StackPanel Spacing="8">
+          <TextBlock x:Name="FilesHeaderTextBlock" Text="Bank" FontWeight="SemiBold" />
+          <Button x:Name="BrowseBankButton"
+                  Content="Open ACB/AWB"
+                  HorizontalAlignment="Stretch"
+                  HorizontalContentAlignment="Center"
+                  Click="OnBrowseBankClick" />
+          <TextBox x:Name="WavPathTextBox" IsVisible="False" IsReadOnly="True" />
+          <TextBox x:Name="OutputDirectoryTextBox" IsVisible="False" IsReadOnly="True" />
+        </StackPanel>
       </Border>
 
       <GridSplitter Grid.Column="1"
@@ -98,65 +55,47 @@
 
       <Border Grid.Column="2" Padding="14" CornerRadius="10" Background="#101C1C1C">
         <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="10">
-          <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
-            <TextBlock x:Name="EntriesHeaderTextBlock"
-                       Text="AWB entries"
-                       FontWeight="SemiBold"
-                       VerticalAlignment="Center" />
-            <Button x:Name="InspectAwbButton"
-                    Grid.Column="1"
-                    Content="Read AWB entries"
-                    Click="OnInspectAwbClick" />
+          <WrapPanel ItemSpacing="8" LineSpacing="6">
+
             <Button x:Name="PreviewEntryButton"
-                    Grid.Column="2"
                     Content="Play"
                     Click="OnPreviewEntryClick" />
             <Button x:Name="AddEntryButton"
-                    Grid.Column="3"
                     Content="New entry"
                     Click="OnAddEntryClick" />
             <Button x:Name="ExportEntriesButton"
-                    Grid.Column="4"
                     Content="Export WAV"
                     Click="OnExportEntriesClick" />
-          </Grid>
+          </WrapPanel>
 
-          <Border Grid.Row="1" Padding="10" CornerRadius="6" Background="#14282929">
+          <Border Grid.Row="1" x:Name="SelectedEntryDetails" IsVisible="False" Padding="10" CornerRadius="6" Background="#14282929">
             <TextBlock x:Name="SelectedEntryTextBlock"
-                       Text="Select an entry to see its associated names."
                        TextWrapping="Wrap" />
           </Border>
 
-          <Grid Grid.Row="2" ColumnDefinitions="118,120,Auto,Auto,Auto,Auto" ColumnSpacing="8">
-            <TextBlock x:Name="ChangesHeaderTextBlock"
-                       Text="2. Entry"
-                       VerticalAlignment="Center"
-                       FontWeight="SemiBold" />
-            <ComboBox Grid.Column="1" x:Name="SelectorModeComboBox" SelectedIndex="0" SelectionChanged="OnSelectorChanged">
+          <WrapPanel Grid.Row="2" ItemSpacing="8" LineSpacing="6">
+
+            <ComboBox x:Name="SelectorModeComboBox" SelectedIndex="0" SelectionChanged="OnSelectorChanged">
               <ComboBoxItem Content="ID AWB" />
               <ComboBoxItem Content="Index" />
             </ComboBox>
-            <NumericUpDown Grid.Column="2"
-                           x:Name="EntryNumberBox"
+            <NumericUpDown x:Name="EntryNumberBox"
                            Width="110"
                            Minimum="0"
                            Maximum="999999"
                            Increment="1"
                            Value="0"
                            ValueChanged="OnSelectorNumberChanged" />
-            <Button Grid.Column="3"
-                    x:Name="SubstituteButton"
+            <Button x:Name="SubstituteButton"
                     Content="Replace"
                     Click="OnSubstituteClick" />
-            <Button Grid.Column="4"
-                    x:Name="RenameEntryButton"
+            <Button x:Name="RenameEntryButton"
                     Content="Rename"
                     Click="OnRenameEntryClick" />
-            <Button Grid.Column="5"
-                    x:Name="DeleteEntryButton"
+            <Button x:Name="DeleteEntryButton"
                     Content="Delete"
                     Click="OnDeleteEntryClick" />
-          </Grid>
+          </WrapPanel>
 
           <DataGrid Grid.Row="3"
                     x:Name="AwbEntriesGrid"
@@ -212,7 +151,7 @@
       <Grid Grid.Column="4" RowDefinitions="Auto,12,210,12,*">
         <Border Grid.Row="0" Padding="14" CornerRadius="10" Background="#101C1C1C">
           <StackPanel Spacing="10">
-            <TextBlock x:Name="LoopHeaderTextBlock" Text="3. Player and loop" FontWeight="SemiBold" />
+
             <Grid RowDefinitions="Auto,Auto" RowSpacing="8">
               <ComboBox x:Name="LoopModeComboBox"
                         HorizontalAlignment="Stretch"
@@ -222,20 +161,19 @@
                 <ComboBoxItem Content="Manual" />
                 <ComboBoxItem Content="No loop" />
               </ComboBox>
-              <Grid Grid.Row="1" ColumnDefinitions="*,*" ColumnSpacing="8">
+              <WrapPanel Grid.Row="1" ItemSpacing="8" LineSpacing="6">
                 <Button x:Name="UseWavLoopButton"
                         Content="Use original loop"
                         HorizontalContentAlignment="Center"
                         Click="OnUseWavLoopClick" />
                 <Button x:Name="PreviewLoopButton"
-                        Grid.Column="1"
                         Content="Play loop"
                         HorizontalContentAlignment="Center"
                         Click="OnPreviewLoopClick" />
-              </Grid>
+              </WrapPanel>
             </Grid>
             <TextBlock x:Name="LoopSummaryTextBlock"
-                       Text="Load a WAV to see duration and loop."
+                       IsVisible="False"
                        Opacity="0.75"
                        TextWrapping="Wrap" />
             <Grid ColumnDefinitions="44,*" ColumnSpacing="10">
@@ -281,17 +219,15 @@
 
         <Border Grid.Row="2" Padding="14" CornerRadius="10" Background="#101C1C1C">
           <Grid RowDefinitions="Auto,Auto,*" RowSpacing="8">
-            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
-            <TextBlock x:Name="QueueHeaderTextBlock" Text="Queue" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <WrapPanel ItemSpacing="8" LineSpacing="6">
+
               <Button x:Name="RemoveReplacementButton"
-                      Grid.Column="1"
                       Content="Remove"
                       Click="OnRemoveReplacementClick" />
               <Button x:Name="ClearReplacementsButton"
-                      Grid.Column="2"
                       Content="Clear"
                       Click="OnClearReplacementsClick" />
-            </Grid>
+            </WrapPanel>
             <TextBlock Grid.Row="1"
                        x:Name="CommandPreviewTextBlock"
                        Text="No command prepared."
@@ -351,5 +287,17 @@
         </Border>
       </Grid>
     </Grid>
+    <Border Grid.Row="2" Padding="14,8" CornerRadius="10" Background="#16232424">
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+        <WrapPanel ItemSpacing="14" LineSpacing="6" VerticalAlignment="Center">
+          <TextBlock x:Name="ExportOptionsHeaderTextBlock" Text="Export options" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <CheckBox x:Name="KeepHcaCheckBox" Content="Keep encoded audio next to the AWB" IsChecked="False" />
+          <CheckBox x:Name="KeepReportsCheckBox" Content="Keep export reports" IsChecked="False" />
+          <CheckBox x:Name="UseModSuffixCheckBox" Content="Append .mod suffix" IsChecked="False" />
+        </WrapPanel>
+        <Button Grid.Column="1" x:Name="ExecuteButton" Content="Export" Padding="22,10"
+                VerticalAlignment="Center" Click="OnExecuteClick" />
+      </Grid>
+    </Border>
   </Grid>
 </Window>

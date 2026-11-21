@@ -8,7 +8,6 @@ using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Linq;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -28,7 +27,6 @@ namespace Level5.AudioTool.Gui;
 public sealed partial class MainWindow : Window
 {
     private static string ExportProvenance => $"LAT_v{typeof(MainWindow).Assembly.GetName().Version!.ToString(3)}";
-    private static string AppVersion => $"v{typeof(MainWindow).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0"}";
     private readonly ObservableCollection<AwbEntryViewModel> _awbEntries = new();
     private readonly ObservableCollection<ReplacementQueueItem> _replacementQueue = new();
     private readonly string _audioRoot;
@@ -55,6 +53,8 @@ public sealed partial class MainWindow : Window
     private int _playbackEndSample;
     private int _playbackDurationSamples;
     private bool _playbackLoops;
+    private string _acbPath = "";
+    private string _awbPath = "";
     private TimelineDragMode _timelineDragMode = TimelineDragMode.None;
     private NewEntryRequest? _newEntryRequest;
     private RedirectEntryRequest? _redirectEntryRequest;
@@ -96,14 +96,8 @@ public sealed partial class MainWindow : Window
     private void ApplyLocalization()
     {
         var strings = UiText.Current;
-        Title = $"L5 Audio Tool {AppVersion}";
-        VersionTextBlock.Text = AppVersion;
-        SubtitleTextBlock.Text = strings.Subtitle;
         FilesHeaderTextBlock.Text = strings.Files;
-        BankLabelTextBlock.Text = strings.Bank;
         BrowseBankButton.Content = strings.Browse;
-        ChangesHeaderTextBlock.Text = strings.Changes;
-        InspectAwbButton.Content = strings.ReadEntries;
         PreviewEntryButton.Content = strings.PlayEntry;
         AddEntryButton.Content = strings.AddEntry;
         SubstituteButton.Content = strings.Replace;
@@ -116,8 +110,6 @@ public sealed partial class MainWindow : Window
         ContextExportEntriesItem.Header = strings.ExportEntries;
         RemoveReplacementButton.Content = strings.Remove;
         ClearReplacementsButton.Content = strings.Clear;
-        LoopHeaderTextBlock.Text = strings.Loop;
-        LoopSummaryTextBlock.Text = strings.AudioEmptySummary;
         UseWavLoopButton.Content = strings.UseSmpl;
         PreviewLoopButton.Content = strings.PreviewLoop;
         KeepHcaCheckBox.Content = strings.KeepHca;
@@ -125,12 +117,7 @@ public sealed partial class MainWindow : Window
         UseModSuffixCheckBox.Content = strings.UseModSuffix;
         ExportOptionsHeaderTextBlock.Text = strings.ExportOptions;
         ExecuteButton.Content = strings.Export;
-        EntriesHeaderTextBlock.Text = strings.Entries;
-        SelectedEntryTextBlock.Text = strings.SelectEntryCueHint;
         OperationHeaderTextBlock.Text = strings.Operation;
-        QueueHeaderTextBlock.Text = strings.Queue;
-        AcbPathTextBox.Watermark = strings.AcbWatermark;
-        AwbPathTextBox.Watermark = strings.AwbWatermark;
         ReplacementQueueGrid.Columns[0].Header = strings.Mode;
         ReplacementQueueGrid.Columns[1].Header = strings.Entry;
         ReplacementQueueGrid.Columns[2].Header = strings.Audio;
@@ -184,20 +171,6 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(path))
         {
             await LoadBankPairAsync(path);
-        }
-    }
-
-    private async void OnBrowseAcbClick(object? sender, RoutedEventArgs e)
-    {
-        var path = await PickFileAsync(UiText.Current.PickAcbTitle, [new FilePickerFileType("CRI ACB") { Patterns = ["*.acb"] }]);
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            var previousBank = CurrentBankKey();
-            AcbPathTextBox.Text = path;
-            await TryLoadSiblingBankAsync(path);
-            ClearBankStateIfChanged(previousBank);
-            SavePreferences();
-            UpdateCommandPreview();
         }
     }
 
@@ -256,20 +229,6 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnBrowseAwbClick(object? sender, RoutedEventArgs e)
-    {
-        var path = await PickFileAsync(UiText.Current.PickAwbTitle, [new FilePickerFileType("CRI AWB") { Patterns = ["*.awb"] }]);
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            var previousBank = CurrentBankKey();
-            AwbPathTextBox.Text = path;
-            await TryLoadSiblingBankAsync(path);
-            ClearBankStateIfChanged(previousBank);
-            SavePreferences();
-            UpdateCommandPreview();
-        }
-    }
-
     private async void OnBrowseWavClick(object? sender, RoutedEventArgs e)
     {
         var path = await PickFileAsync(UiText.Current.PickAudioTitle, [new FilePickerFileType("Audio") { Patterns = ["*.wav", "*.flac", "*.ogg", "*.mp3", "*.m4a", "*.aac", "*.aiff", "*.aif"] }]);
@@ -307,7 +266,7 @@ public sealed partial class MainWindow : Window
     private async void OnExportEntriesClick(object? sender, RoutedEventArgs e)
     {
         var entries = AwbEntriesGrid.SelectedItems.OfType<AwbEntryViewModel>().OrderBy(entry => entry.Index).ToList();
-        if (entries.Count == 0 || string.IsNullOrWhiteSpace(AwbPathTextBox.Text) || !File.Exists(AwbPathTextBox.Text))
+        if (entries.Count == 0 || string.IsNullOrWhiteSpace(_awbPath) || !File.Exists(_awbPath))
         {
             AppendLog(UiText.Current.SelectAwbBeforeExport);
             return;
@@ -327,11 +286,11 @@ public sealed partial class MainWindow : Window
             foreach (var entry in entries)
             {
                 var target = Path.Combine(outputDirectory, EntryWavFileName(entry));
-                var args = new List<string> { "preview-awb-entry", AwbPathTextBox.Text!, "--output", previewDirectory, "--id", entry.Id.ToString() };
-                if (!string.IsNullOrWhiteSpace(AcbPathTextBox.Text) && File.Exists(AcbPathTextBox.Text))
+                var args = new List<string> { "preview-awb-entry", _awbPath, "--output", previewDirectory, "--id", entry.Id.ToString() };
+                if (!string.IsNullOrWhiteSpace(_acbPath) && File.Exists(_acbPath))
                 {
                     args.Add("--acb");
-                    args.Add(AcbPathTextBox.Text!);
+                    args.Add(_acbPath);
                 }
 
                 var result = await RunAudioCommandAsync(args);
@@ -384,14 +343,9 @@ public sealed partial class MainWindow : Window
         return directory;
     }
 
-    private async void OnInspectAwbClick(object? sender, RoutedEventArgs e)
-    {
-        await InspectAwbAsync();
-    }
-
     private async Task InspectAwbAsync()
     {
-        if (string.IsNullOrWhiteSpace(AwbPathTextBox.Text))
+        if (string.IsNullOrWhiteSpace(_awbPath))
         {
             AppendLog(UiText.Current.SelectAwbBeforeInspect);
             return;
@@ -399,11 +353,11 @@ public sealed partial class MainWindow : Window
 
         await RunBusyAsync(async () =>
         {
-            var inspectArgs = new List<string> { "inspect", AwbPathTextBox.Text! };
-            if (!string.IsNullOrWhiteSpace(AcbPathTextBox.Text) && File.Exists(AcbPathTextBox.Text))
+            var inspectArgs = new List<string> { "inspect", _awbPath };
+            if (!string.IsNullOrWhiteSpace(_acbPath) && File.Exists(_acbPath))
             {
                 inspectArgs.Add("--acb");
-                inspectArgs.Add(AcbPathTextBox.Text!);
+                inspectArgs.Add(_acbPath);
             }
 
             var result = await RunAudioCommandAsync(inspectArgs);
@@ -432,7 +386,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnAddEntryClick(object? sender, RoutedEventArgs e)
     {
-        if (_awbEntries.Count == 0 || string.IsNullOrWhiteSpace(AcbPathTextBox.Text) || string.IsNullOrWhiteSpace(AwbPathTextBox.Text))
+        if (_awbEntries.Count == 0 || string.IsNullOrWhiteSpace(_acbPath) || string.IsNullOrWhiteSpace(_awbPath))
         {
             AppendLog(UiText.Current.SelectBankBeforeNewEntry);
             return;
@@ -475,7 +429,7 @@ public sealed partial class MainWindow : Window
 
     private async Task PreviewSelectedAwbEntryAsync(bool autoPlay)
     {
-        if (string.IsNullOrWhiteSpace(AwbPathTextBox.Text) || !File.Exists(AwbPathTextBox.Text))
+        if (string.IsNullOrWhiteSpace(_awbPath) || !File.Exists(_awbPath))
         {
             AppendLog(UiText.Current.SelectAwbBeforePreview);
             return;
@@ -490,16 +444,16 @@ public sealed partial class MainWindow : Window
             var previewArgs = new List<string>
             {
                 "preview-awb-entry",
-                AwbPathTextBox.Text!,
+                _awbPath,
                 "--output",
                 previewDirectory,
                 selectorMode,
                 selectorValue
             };
-            if (!string.IsNullOrWhiteSpace(AcbPathTextBox.Text) && File.Exists(AcbPathTextBox.Text))
+            if (!string.IsNullOrWhiteSpace(_acbPath) && File.Exists(_acbPath))
             {
                 previewArgs.Add("--acb");
-                previewArgs.Add(AcbPathTextBox.Text!);
+                previewArgs.Add(_acbPath);
             }
 
             var result = await RunAudioCommandAsync(previewArgs);
@@ -581,7 +535,7 @@ public sealed partial class MainWindow : Window
 
         if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
         {
-            if (!string.IsNullOrWhiteSpace(AwbPathTextBox.Text) && File.Exists(AwbPathTextBox.Text))
+            if (!string.IsNullOrWhiteSpace(_awbPath) && File.Exists(_awbPath))
             {
                 await PreviewSelectedAwbEntryAsync(autoPlay: true);
                 return;
@@ -1095,7 +1049,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnRenameEntryClick(object? sender, RoutedEventArgs e)
     {
-        if (AwbEntriesGrid.SelectedItem is not AwbEntryViewModel entry || string.IsNullOrWhiteSpace(AcbPathTextBox.Text))
+        if (AwbEntriesGrid.SelectedItem is not AwbEntryViewModel entry || string.IsNullOrWhiteSpace(_acbPath))
         {
             AppendLog(UiText.Current.SelectEntryBeforeAction);
             return;
@@ -1115,7 +1069,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnDeleteEntryClick(object? sender, RoutedEventArgs e)
     {
-        if (AwbEntriesGrid.SelectedItem is not AwbEntryViewModel entry || string.IsNullOrWhiteSpace(AcbPathTextBox.Text))
+        if (AwbEntriesGrid.SelectedItem is not AwbEntryViewModel entry || string.IsNullOrWhiteSpace(_acbPath))
         {
             AppendLog(UiText.Current.SelectEntryBeforeAction);
             return;
@@ -1730,8 +1684,8 @@ public sealed partial class MainWindow : Window
 
     private bool ValidateInputs(out string acbPath, out string awbPath, out string wavPath, out string outputDirectory)
     {
-        acbPath = AcbPathTextBox.Text?.Trim() ?? "";
-        awbPath = AwbPathTextBox.Text?.Trim() ?? "";
+        acbPath = _acbPath.Trim();
+        awbPath = _awbPath.Trim();
         wavPath = WavPathTextBox.Text?.Trim() ?? "";
         outputDirectory = OutputDirectoryTextBox.Text?.Trim() ?? "";
 
@@ -1844,9 +1798,10 @@ public sealed partial class MainWindow : Window
         LoopTimeline.LoopEnd = end;
         LoopTimeline.HasLoop = LoopModeComboBox.SelectedIndex != 2 && _wavSamples > 0 && end > start;
         UpdatePlaybackVisuals();
-        LoopSummaryTextBlock.Text = _wavSamples <= 0
-            ? UiText.Current.AudioEmptySummary
-            : UiText.Current.AudioSummary(_wavSamples, FormatSeconds(_wavSamples), DescribeLoop());
+        LoopSummaryTextBlock.IsVisible = _wavSamples > 0;
+        LoopSummaryTextBlock.Text = _wavSamples > 0
+            ? UiText.Current.AudioSummary(_wavSamples, FormatSeconds(_wavSamples), DescribeLoop())
+            : "";
     }
 
     private void SetLoopEnabled(bool enabled)
@@ -2298,20 +2253,20 @@ public sealed partial class MainWindow : Window
         var previousBank = CurrentBankKey();
         if (extension == ".acb")
         {
-            AcbPathTextBox.Text = path;
-            AwbPathTextBox.Text = Path.ChangeExtension(path, ".awb");
+            _acbPath = path;
+            _awbPath = Path.ChangeExtension(path, ".awb");
         }
         else
         {
-            AwbPathTextBox.Text = path;
-            AcbPathTextBox.Text = Path.ChangeExtension(path, ".acb");
+            _awbPath = path;
+            _acbPath = Path.ChangeExtension(path, ".acb");
         }
 
         ClearBankStateIfChanged(previousBank);
         SavePreferences();
         UpdateCommandPreview();
 
-        if (File.Exists(AcbPathTextBox.Text) && File.Exists(AwbPathTextBox.Text))
+        if (File.Exists(_acbPath) && File.Exists(_awbPath))
         {
             await InspectAwbAsync();
         }
@@ -2321,28 +2276,10 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task TryLoadSiblingBankAsync(string path)
-    {
-        var sibling = Path.ChangeExtension(path, Path.GetExtension(path).Equals(".acb", StringComparison.OrdinalIgnoreCase) ? ".awb" : ".acb");
-        if (File.Exists(sibling))
-        {
-            if (sibling.EndsWith(".acb", StringComparison.OrdinalIgnoreCase))
-            {
-                AcbPathTextBox.Text = sibling;
-            }
-            else
-            {
-                AwbPathTextBox.Text = sibling;
-            }
-
-            await InspectAwbAsync();
-        }
-    }
-
     private string CurrentBankKey()
     {
-        var acb = NormalizeBankPath(AcbPathTextBox.Text);
-        var awb = NormalizeBankPath(AwbPathTextBox.Text);
+        var acb = NormalizeBankPath(_acbPath);
+        var awb = NormalizeBankPath(_awbPath);
         return $"{acb}|{awb}";
     }
 
@@ -2390,14 +2327,15 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        SelectedEntryDetails.IsVisible = entry is not null;
         SelectedEntryTextBlock.Text = entry is null
-            ? UiText.Current.SelectEntryCueHint
+            ? ""
             : UiText.Current.EntryCueDetails(entry.Id, entry.Index, entry.CueDetails);
     }
 
     private async Task RestorePreviousSessionAsync()
     {
-        if (File.Exists(AcbPathTextBox.Text) && File.Exists(AwbPathTextBox.Text))
+        if (File.Exists(_acbPath) && File.Exists(_awbPath))
         {
             await InspectAwbAsync();
         }
@@ -2456,8 +2394,8 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            AcbPathTextBox.Text = preferences.AcbPath ?? "";
-            AwbPathTextBox.Text = preferences.AwbPath ?? "";
+            _acbPath = preferences.AcbPath ?? "";
+            _awbPath = preferences.AwbPath ?? "";
             WavPathTextBox.Text = preferences.AudioPath ?? "";
             OutputDirectoryTextBox.Text = string.IsNullOrWhiteSpace(preferences.OutputDirectory)
                 ? Path.Combine(_dataRoot, "work")
@@ -2503,8 +2441,8 @@ public sealed partial class MainWindow : Window
         {
             var preferences = new UserPreferences
             {
-                AcbPath = AcbPathTextBox.Text?.Trim() ?? "",
-                AwbPath = AwbPathTextBox.Text?.Trim() ?? "",
+                AcbPath = _acbPath.Trim(),
+                AwbPath = _awbPath.Trim(),
                 AudioPath = WavPathTextBox.Text?.Trim() ?? "",
                 OutputDirectory = OutputDirectoryTextBox.Text?.Trim() ?? "",
                 LastSourceDirectory = _lastSourceDirectory,
@@ -2575,8 +2513,8 @@ public sealed partial class MainWindow : Window
 
     private async Task RunBusyAsync(Func<Task> action)
     {
+        BrowseBankButton.IsEnabled = false;
         ExecuteButton.IsEnabled = false;
-        InspectAwbButton.IsEnabled = false;
         PreviewEntryButton.IsEnabled = false;
         ExportEntriesButton.IsEnabled = false;
         try
@@ -2585,8 +2523,8 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
+            BrowseBankButton.IsEnabled = true;
             ExecuteButton.IsEnabled = true;
-            InspectAwbButton.IsEnabled = true;
             PreviewEntryButton.IsEnabled = true;
             ExportEntriesButton.IsEnabled = true;
         }
@@ -2785,12 +2723,8 @@ public sealed partial class MainWindow : Window
 
         private static UiText Spanish { get; } = new()
         {
-            Subtitle = "Prepara cambios de audio para bancos ACB/AWB",
-            Files = "1. Banco",
-            Bank = "ACB/AWB",
-            Browse = "Examinar",
-            Changes = "2. Entrada",
-            ReadEntries = "Leer entradas AWB",
+            Files = "Banco",
+            Browse = "Abrir ACB/AWB",
             PlayEntry = "Reproducir",
             Replace = "Sustituir",
             AddEntry = "Nueva entrada",
@@ -2799,19 +2733,14 @@ public sealed partial class MainWindow : Window
             ExportEntries = "Exportar WAV",
             Remove = "Quitar",
             Clear = "Limpiar",
-            Loop = "3. Reproductor y loop",
             UseSmpl = "Usar loop original",
             PreviewLoop = "Reproducir loop",
             KeepHca = "Guardar audio codificado junto al AWB",
             KeepReports = "Guardar informes de exportación",
             UseModSuffix = "Añadir sufijo .mod",
             ExportOptions = "Opciones de exportación",
-            Export = "4. Exportar ACB/AWB",
-            Entries = "Entradas AWB",
+            Export = "Exportar",
             Operation = "Registro",
-            Queue = "4. Cola",
-            AcbWatermark = "Banco .acb",
-            AwbWatermark = "Banco .awb",
             Mode = "Modo",
             Entry = "Entrada",
             Audio = "Audio",
@@ -2821,7 +2750,6 @@ public sealed partial class MainWindow : Window
             Size = "Tamaño",
             PrimaryCue = "Nombre",
             CueRefs = "Usos",
-            SelectEntryCueHint = "Selecciona una entrada para ver sus nombres asociados.",
             NoResolvedName = "Nombre no resuelto en el ACB cargado",
             AutoWavSmpl = "Loop del archivo",
             Manual = "Manual",
@@ -2872,13 +2800,10 @@ public sealed partial class MainWindow : Window
             InvalidLoopRange = "El rango de loop manual no es válido.",
             ReadEntriesBeforeIndexPatch = "Para usar índice, primero lee las entradas del AWB.",
             BankPairMissing = "No se encontró el par ACB/AWB junto al archivo seleccionado.",
-            AudioEmptySummary = "Carga o escucha un audio para ver duración y loop.",
             NoLoopLower = "sin loop",
             PlayerStartFailed = "No se pudo iniciar el reproductor integrado.",
             PlayerCannotPlay = "El reproductor integrado no pudo reproducir ese archivo.",
             PickBankTitle = "Seleccionar ACB/AWB",
-            PickAcbTitle = "Seleccionar ACB",
-            PickAwbTitle = "Seleccionar AWB",
             PickAudioTitle = "Seleccionar audio",
             PickOutputFolderTitle = "Seleccionar carpeta de salida",
             PickExportFolderTitle = "Seleccionar carpeta de exportación",
@@ -2887,12 +2812,8 @@ public sealed partial class MainWindow : Window
 
         private static UiText English { get; } = new()
         {
-            Subtitle = "Prepare audio changes for ACB/AWB banks",
-            Files = "1. Bank",
-            Bank = "ACB/AWB",
-            Browse = "Browse",
-            Changes = "2. Entry",
-            ReadEntries = "Read AWB entries",
+            Files = "Bank",
+            Browse = "Open ACB/AWB",
             PlayEntry = "Play",
             Replace = "Replace",
             AddEntry = "New entry",
@@ -2901,19 +2822,14 @@ public sealed partial class MainWindow : Window
             ExportEntries = "Export WAV",
             Remove = "Remove",
             Clear = "Clear",
-            Loop = "3. Player and loop",
             UseSmpl = "Use original loop",
             PreviewLoop = "Play loop",
             KeepHca = "Keep encoded audio next to the AWB",
             KeepReports = "Keep export reports",
             UseModSuffix = "Append .mod suffix",
             ExportOptions = "Export options",
-            Export = "4. Export ACB/AWB",
-            Entries = "AWB Entries",
+            Export = "Export",
             Operation = "Log",
-            Queue = "4. Queue",
-            AcbWatermark = ".acb bank",
-            AwbWatermark = ".awb bank",
             Mode = "Mode",
             Entry = "Entry",
             Audio = "Audio",
@@ -2923,7 +2839,6 @@ public sealed partial class MainWindow : Window
             Size = "Size",
             PrimaryCue = "Name",
             CueRefs = "Uses",
-            SelectEntryCueHint = "Select an entry to see its associated names.",
             NoResolvedName = "No name resolved from the loaded ACB",
             AutoWavSmpl = "File loop",
             Manual = "Manual",
@@ -2974,25 +2889,18 @@ public sealed partial class MainWindow : Window
             InvalidLoopRange = "The manual loop range is invalid.",
             ReadEntriesBeforeIndexPatch = "Read the AWB entries before using index mode.",
             BankPairMissing = "No matching ACB/AWB pair was found next to the selected file.",
-            AudioEmptySummary = "Load or play audio to see duration and loop data.",
             NoLoopLower = "no loop",
             PlayerStartFailed = "The built-in player could not be started.",
             PlayerCannotPlay = "The built-in player could not play that file.",
             PickBankTitle = "Select ACB/AWB",
-            PickAcbTitle = "Select ACB",
-            PickAwbTitle = "Select AWB",
             PickAudioTitle = "Select audio",
             PickOutputFolderTitle = "Select output folder",
             PickExportFolderTitle = "Select export folder",
             PickEntryExportTitle = "Select folder for WAV files"
         };
 
-        public string Subtitle { get; init; } = "";
         public string Files { get; init; } = "";
-        public string Bank { get; init; } = "";
         public string Browse { get; init; } = "";
-        public string Changes { get; init; } = "";
-        public string ReadEntries { get; init; } = "";
         public string PlayEntry { get; init; } = "";
         public string Replace { get; init; } = "";
         public string AddEntry { get; init; } = "";
@@ -3001,7 +2909,6 @@ public sealed partial class MainWindow : Window
         public string ExportEntries { get; init; } = "";
         public string Remove { get; init; } = "";
         public string Clear { get; init; } = "";
-        public string Loop { get; init; } = "";
         public string UseSmpl { get; init; } = "";
         public string PreviewLoop { get; init; } = "";
         public string KeepHca { get; init; } = "";
@@ -3009,11 +2916,7 @@ public sealed partial class MainWindow : Window
         public string UseModSuffix { get; init; } = "";
         public string ExportOptions { get; init; } = "";
         public string Export { get; init; } = "";
-        public string Entries { get; init; } = "";
         public string Operation { get; init; } = "";
-        public string Queue { get; init; } = "";
-        public string AcbWatermark { get; init; } = "";
-        public string AwbWatermark { get; init; } = "";
         public string Mode { get; init; } = "";
         public string Entry { get; init; } = "";
         public string Audio { get; init; } = "";
@@ -3023,7 +2926,6 @@ public sealed partial class MainWindow : Window
         public string Size { get; init; } = "";
         public string PrimaryCue { get; init; } = "";
         public string CueRefs { get; init; } = "";
-        public string SelectEntryCueHint { get; init; } = "";
         public string NoResolvedName { get; init; } = "";
         public string AutoWavSmpl { get; init; } = "";
         public string Manual { get; init; } = "";
@@ -3074,13 +2976,10 @@ public sealed partial class MainWindow : Window
         public string InvalidLoopRange { get; init; } = "";
         public string ReadEntriesBeforeIndexPatch { get; init; } = "";
         public string BankPairMissing { get; init; } = "";
-        public string AudioEmptySummary { get; init; } = "";
         public string NoLoopLower { get; init; } = "";
         public string PlayerStartFailed { get; init; } = "";
         public string PlayerCannotPlay { get; init; } = "";
         public string PickBankTitle { get; init; } = "";
-        public string PickAcbTitle { get; init; } = "";
-        public string PickAwbTitle { get; init; } = "";
         public string PickAudioTitle { get; init; } = "";
         public string PickOutputFolderTitle { get; init; } = "";
         public string PickExportFolderTitle { get; init; } = "";
